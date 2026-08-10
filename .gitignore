@@ -1,0 +1,49 @@
+# Virtual environments
+.venv/
+.venv_test/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Datasets (downloaded at runtime)
+*.csv
+*.arff
+*.parquet
+openml/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# LaTeX build artifacts
+paper_latex/*.aux
+paper_latex/*.log
+paper_latex/*.out
+paper_latex/*.synctex.gz
+paper_latex/*.fdb_latexmk
+paper_latex/*.fls
+paper_latex/*.bbl
+paper_latex/*.blg
+paper_latex/*.toc
+
+# gsj package (has its own repo at qzyu999/gsj)
+gsj/
+
+# pytest
+.pytest_cache/
