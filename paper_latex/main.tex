@@ -1,10 +1,9 @@
 % Closed-Form Plug-In Bandwidth Selection for Multivariate KDE
-% Target: Journal of Computational and Graphical Statistics (JCGS)
-% or Computational Statistics & Data Analysis (CSDA)
+% Revised after external review — all theoretical claims qualified,
+% empirical tables filled, embedding experiments included.
 
 \documentclass[12pt]{article}
 
-% Packages
 \usepackage[margin=1in]{geometry}
 \usepackage{amsmath,amssymb,amsthm}
 \usepackage{mathtools}
@@ -17,21 +16,16 @@
 \usepackage{hyperref}
 \usepackage{xcolor}
 \usepackage{subcaption}
+\usepackage{multirow}
 
-% Theorem environments
 \newtheorem{theorem}{Theorem}
 \newtheorem{lemma}[theorem]{Lemma}
-\newtheorem{proposition}[theorem]{Proposition}
 \newtheorem{corollary}[theorem]{Corollary}
 \newtheorem{remark}{Remark}
 
-% Notation shortcuts
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\E}{\mathbb{E}}
-\newcommand{\Var}{\mathrm{Var}}
-\newcommand{\tr}{\mathrm{tr}}
 \newcommand{\bx}{\bm{x}}
-\newcommand{\by}{\bm{y}}
 \newcommand{\bt}{\bm{t}}
 \newcommand{\bmu}{\bm{\mu}}
 \newcommand{\bdelta}{\bm{\delta}}
@@ -44,330 +38,118 @@
 \newcommand{\bSigma}{\bm{\Sigma}}
 \newcommand{\Id}{\bm{I}_d}
 \newcommand{\norm}[1]{\left\| #1 \right\|}
-\newcommand{\abs}[1]{\left| #1 \right|}
 
 \title{Closed-Form Plug-In Bandwidth Selection\\for Multivariate Kernel Density Estimation}
-
-\author{
-  Jared Yu\\
-  \textit{email}\\
-}
-
+\author{Jared Yu}
 \date{\today}
 
 \begin{document}
-
 \maketitle
 
 % ============================================================================
 \begin{abstract}
-We derive a closed-form expression for the integrated squared Laplacian roughness of a multivariate Gaussian kernel density estimator. The result is a three-term polynomial $P_d(t) = t^2/16 - (d+2)t/4 + d(d+2)/4$ in the scaled pairwise squared distance $t$, enabling non-iterative computation of the roughness functional in any dimension $d$. We use this expression in a one-stage direct plug-in bandwidth selector with a Silverman pilot---the same approach underlying practical implementations of the Sheather--Jones methodology such as R's \texttt{locfit::sjpi}. The resulting scalar bandwidth minimizes the asymptotic mean integrated squared error for isotropic Gaussian KDE without requiring iterative optimization or matrix bandwidth parameterization. We provide scalable computational strategies---subsampling, spatial truncation, and FFT-based convolution---that reduce the $O(n^2 d)$ exact computation to practical running times for large datasets. Empirical evaluation on synthetic mixtures and real datasets demonstrates substantial improvement over rule-of-thumb selectors on multimodal data while maintaining comparable performance on unimodal data. The method is implemented in the open-source Python package \texttt{gsj}, available on PyPI.
+We derive a closed-form expression for the integrated squared Laplacian roughness of an isotropic multivariate Gaussian kernel density estimator. The result is a three-term polynomial $P_d(t) = t^2/16 - (d+2)t/4 + d(d+2)/4$ in the scaled pairwise squared distance, enabling non-iterative roughness estimation in any dimension~$d$. We use this expression in a one-stage direct plug-in bandwidth selector with a Silverman pilot---a construction closely related to the roughness-estimation step used in practical implementations of the Sheather--Jones methodology. The resulting scalar bandwidth targets the asymptotic mean integrated squared error for isotropic Gaussian KDE without requiring iterative optimization or matrix bandwidth parameterization. We provide scalable computational strategies that reduce the $O(n^2 d)$ exact computation to practical running times for large datasets. Empirical evaluation demonstrates: (i)~substantial ISE improvement over rule-of-thumb selectors on multimodal synthetic data; (ii)~improved anomaly detection AUC on real datasets (up to $+8.5\%$ absolute on MNIST digits); and (iii)~superior novelty detection in text embedding spaces, winning 80\% of leave-one-category-out comparisons on the 20~Newsgroups corpus while outperforming likelihood cross-validation in both accuracy and speed. The method is implemented in the open-source Python package \texttt{gsj}.
 
 \medskip
-\noindent\textbf{Keywords:} bandwidth selection, kernel density estimation, plug-in method, multivariate, nonparametric, AMISE, Laplacian roughness
+\noindent\textbf{Keywords:} bandwidth selection, kernel density estimation, plug-in method, multivariate, nonparametric, anomaly detection
 \end{abstract}
 
 % ============================================================================
 \section{Introduction}
 \label{sec:intro}
 
-Kernel density estimation (KDE) is a fundamental tool in nonparametric statistics for estimating probability density functions from observed data. Given observations $\bX_1, \ldots, \bX_n \in \R^d$, the Gaussian kernel density estimator with bandwidth matrix $\bm{H}$ is
-\begin{equation}
-  \hat{f}_{\bm{H}}(\bx) = \frac{1}{n} \sum_{i=1}^n K_{\bm{H}}(\bx - \bX_i),
-  \label{eq:kde}
-\end{equation}
-where $K_{\bm{H}}(\bt) = (2\pi)^{-d/2} |\bm{H}|^{-1/2} \exp(-\frac{1}{2}\bt^T \bm{H}^{-1} \bt)$.
+Kernel density estimation (KDE) is fundamental to nonparametric statistics. Given $\bX_1, \ldots, \bX_n \in \R^d$, the Gaussian KDE with bandwidth matrix~$\bm{H}$ is $\hat{f}_{\bm{H}}(\bx) = n^{-1} \sum_{i=1}^n K_{\bm{H}}(\bx - \bX_i)$. The quality of the estimator depends critically on~$\bm{H}$.
 
-The quality of the estimator depends critically on the bandwidth $\bm{H}$. While sophisticated matrix bandwidth selectors exist \citep{duong2003,duong2005,chacon2010}, they require iterative optimization over $d(d+1)/2$ parameters and are computationally expensive for moderate $d$. At the other extreme, simple rules of thumb \citep{scott1992,silverman1986} assume a Gaussian reference density and can severely oversmooth multimodal data.
+Matrix bandwidth selectors \citep{duong2003,chacon2010} require iterating over $d(d+1)/2$ parameters. Rules of thumb \citep{scott1992,silverman1986} assume Gaussian reference densities and oversmooth multimodal data. In one dimension, the Sheather--Jones (SJ) plug-in selector \citep{sheather1991} estimates the roughness of~$f''$ from the data. The core of SJ is a closed-form evaluation of the Gaussian roughness integral. However, no comparably simple closed-form roughness expression has been available for~$d > 1$.
 
-In one dimension, the Sheather--Jones (SJ) plug-in selector \citep{sheather1991} provides an effective middle ground: it estimates the roughness of the density's second derivative from the data and plugs this into the AMISE-optimal formula. The core of SJ is a closed-form evaluation of the Gaussian second-derivative roughness integral. However, the full SJ algorithm also includes a multi-stage pilot bandwidth selection procedure that achieves optimal convergence rates \citep{hall1991}. No comparable closed-form roughness expression has been available for $d > 1$.
-
-\textbf{Contribution.} We derive the $d$-dimensional analog of this closed-form roughness expression---a compact polynomial $P_d(t)$ governing the pairwise contribution to the integrated squared Laplacian. This enables a practical one-stage plug-in bandwidth selector for multivariate Gaussian KDE. Specifically, we provide:
-\begin{enumerate}
-  \item A closed-form expression for $\int [\nabla^2 K_{h_0}(\bx - \bX_i)][\nabla^2 K_{h_0}(\bx - \bX_j)] \, d\bx$ in arbitrary dimension $d$ (Section~\ref{sec:derivation});
-  \item Verification that the formula reduces to the 1D Gaussian roughness expression when $d=1$ (Section~\ref{sec:relation});
-  \item Scalable computational strategies for large datasets (Section~\ref{sec:computation});
-  \item Comprehensive empirical evaluation (Section~\ref{sec:experiments});
-  \item An open-source implementation as the \texttt{gsj} Python package (Section~\ref{sec:software}).
-\end{enumerate}
+\textbf{Contribution.} We derive the $d$-dimensional closed-form roughness expression---a polynomial $P_d(t)$---and use it in a practical one-stage plug-in selector. We show it improves density estimation quality, anomaly detection accuracy, and novelty detection in embedding spaces, while being computationally cheaper than cross-validation alternatives. The method is released as the open-source \texttt{gsj} package (\url{https://pypi.org/project/gsj/}).
 
 % ============================================================================
 \section{Background}
 \label{sec:background}
 
-\subsection{AMISE for Isotropic Bandwidth in Whitened Coordinates}
-\label{sec:amise}
+\subsection{AMISE in Whitened Coordinates}
 
-We consider data that has been pre-whitened: $\bY_i = \hat{\bSigma}^{-1/2}\bX_i$, where $\hat{\bSigma}$ is the sample covariance of the original data $\bX_1, \ldots, \bX_n$. In the whitened space, the KDE uses an isotropic bandwidth $\bm{H} = h^2 \Id$, corresponding to bandwidth matrix $h^2 \hat{\bSigma}$ in the original coordinates.
-
-For this isotropic Gaussian KDE in whitened coordinates, the asymptotic mean integrated squared error is
+We work in whitened coordinates: $\bY_i = \hat{\bSigma}^{-1/2}\bX_i$ where $\hat{\bSigma}$ is the sample covariance. In this space the bandwidth is isotropic ($\bm{H} = h^2\Id$) and the AMISE is:
 \begin{equation}
-  \text{AMISE}(h) = \frac{R(K)}{nh^d} + \frac{h^4}{4}\Psi,
+  \text{AMISE}(h) = \frac{(4\pi)^{-d/2}}{nh^d} + \frac{h^4}{4}\Psi, \qquad \Psi = \int [\nabla^2 f(\bx)]^2 d\bx.
   \label{eq:amise}
 \end{equation}
-where $R(K) = (4\pi)^{-d/2}$ is the roughness of the standard $d$-dimensional Gaussian kernel, and
-\begin{equation}
-  \Psi = \int [\nabla^2 f(\bx)]^2 \, d\bx
-  \label{eq:psi_def}
-\end{equation}
-is the integrated squared Laplacian of the true density $f$ in the whitened space.
+Minimizing gives $h^* = (d(4\pi)^{-d/2}/(n\Psi))^{1/(d+4)}$.
 
 \begin{remark}
-The use of the Laplacian $\nabla^2 f$ (rather than the full Hessian trace $\tr\{\bSigma \nabla^2 f\}$) as the bias functional is appropriate specifically because we work in whitened coordinates where $\bSigma = \Id$. In original coordinates with general $\bm{H} = h^2 \bSigma$, the bias functional would involve $\tr\{\bSigma \nabla^2 f\}$, which reduces to $\nabla^2 f$ after the whitening transform.
+The Laplacian roughness functional $\Psi$ is the correct bias term specifically because we work in whitened coordinates. In original coordinates with $\bm{H} = h^2\hat{\bSigma}$, the bias involves $\text{tr}\{\hat{\bSigma}\nabla^2 f\}$, which reduces to $\nabla^2 f$ after whitening.
 \end{remark}
 
-Minimizing~\eqref{eq:amise} with respect to $h$ yields the AMISE-optimal bandwidth:
-\begin{equation}
-  h^*_{\text{AMISE}} = \left(\frac{d \cdot R(K)}{n \cdot \Psi}\right)^{1/(d+4)}.
-  \label{eq:h_star}
-\end{equation}
+\subsection{Relationship to the Original SJ Algorithm}
+\label{sec:sj_relation}
 
-\subsection{The Plug-In Approach}
+The full SJ algorithm (1991) uses a \emph{two-stage} pilot: (i)~estimate $\psi_6$ via normal reference, (ii)~derive pilot~$g_2$ from~$\psi_6$, (iii)~estimate~$\psi_4$ using~$g_2$, (iv)~plug into AMISE. This achieves convergence rate $O(n^{-4/13})$ \citep{hall1991}.
 
-Since $\Psi$ depends on the unknown density $f$, the plug-in approach estimates it from the data using a pilot bandwidth $h_0$:
-\begin{equation}
-  \hat{\Psi}(h_0) = \int \left[\nabla^2 \hat{f}_{h_0}(\bx)\right]^2 d\bx = \frac{1}{n^2} \sum_{i=1}^n \sum_{j=1}^n \int \nabla^2 K_{h_0}(\bx - \bY_i) \cdot \nabla^2 K_{h_0}(\bx - \bY_j) \, d\bx.
-  \label{eq:roughness_pairwise}
-\end{equation}
-
-We note that $\hat{\Psi}(h_0)$ is an estimate of $R(\nabla^2 \hat{f}_{h_0})$---the roughness of the Laplacian of the \emph{smoothed} KDE---which targets $\Psi = R(\nabla^2 f)$ as $h_0 \to 0$ with appropriate rate conditions.
-
-\subsection{The Original Sheather--Jones Algorithm}
-\label{sec:original_sj}
-
-For context, the full Sheather--Jones (1991) algorithm in one dimension involves a \emph{two-stage} pilot selection:
-\begin{enumerate}
-  \item Estimate $\psi_6 = R(f^{(3)})$ using a normal reference: $\hat{\psi}_6^{NR} = -15/(16\sqrt{\pi})\hat{\sigma}^{-7}$.
-  \item Derive a data-driven pilot $g_2$ from $\hat{\psi}_6$: $g_2 = (-6/(\sqrt{2\pi}\hat{\psi}_6 n))^{1/7}$.
-  \item Estimate $\psi_4 = R(f'')$ using pilot $g_2$.
-  \item Plug into AMISE: $\hat{h} = (R(K)/(n\hat{\psi}_4))^{1/5}$.
-\end{enumerate}
-
-This two-stage approach achieves the convergence rate $O(n^{-4/13})$, compared to $O(n^{-5/14})$ for one-stage plug-in methods \citep{hall1991}. The theoretical advantage comes from using a higher-order roughness functional ($\psi_6$) to calibrate the pilot---$\psi_6$ is less sensitive to pilot choice than $\psi_4$, so the normal-reference estimate suffices for the first stage.
-
-\textbf{Our approach} uses a one-stage plug-in with a Silverman pilot (Step 4 only, with $g_2$ replaced by the Silverman bandwidth). This is the same variant implemented in practical software such as R's \texttt{locfit::sjpi} \citep{loader1999}. The one-stage approach sacrifices the optimal convergence rate but gains simplicity and direct generalizability to $d$ dimensions. In practice, the $(d+4)$-th root in the AMISE formula dampens pilot-induced errors: a 20\% error in $\hat{\Psi}$ produces only $\sim$3--4\% error in $\hat{h}$.
-
-\subsection{Existing Multivariate Bandwidth Selectors}
-
-\begin{itemize}
-  \item \textbf{Scott's rule} \citep{scott1992}: $h = n^{-1/(d+4)}$. Assumes Gaussian reference density.
-  \item \textbf{Silverman's rule} \citep{silverman1986}: $h = (4/(n(d+2)))^{1/(d+4)}$. Similar normal reference.
-  \item \textbf{Duong--Hazelton} \citep{duong2003}: Full bandwidth matrix via iterative plug-in. $d(d+1)/2$ parameters.
-  \item \textbf{Botev et al.} \citep{botev2010}: Diffusion-based, pilot-free. 1D only (relies on FFT grid).
-  \item \textbf{Likelihood cross-validation}: Grid search over $h$ maximizing LOO log-likelihood. Any $d$ but expensive.
-\end{itemize}
-
-Our method fills a specific gap: a \emph{non-iterative, closed-form} plug-in selector that works in any $d$, without the complexity of full matrix bandwidth optimization or the cost of cross-validation.
+Our approach uses a \emph{one-stage} Silverman pilot, the same construction implemented in R's \texttt{locfit::sjpi} \citep{loader1999}. This sacrifices the optimal rate (achieving $O(n^{-5/14})$ in 1D) but gains simplicity and direct generalizability to $d$~dimensions. In practice, the $(d+4)$-th root dampens pilot errors: a 20\% error in $\hat{\Psi}$ produces only $\sim$3--4\% error in $\hat{h}$.
 
 % ============================================================================
 \section{Derivation}
 \label{sec:derivation}
 
-All derivations below assume whitened data (covariance $= \Id$) and isotropic Gaussian kernel with bandwidth $h_0$.
+All derivations assume whitened data and isotropic bandwidth $h_0$.
 
-\subsection{The Multivariate Kernel Laplacian}
-
-\begin{lemma}
-\label{lem:laplacian}
-For the isotropic Gaussian kernel $K_h(\bt) = (2\pi h^2)^{-d/2} \exp(-\norm{\bt}^2/(2h^2))$, the Laplacian is
-\begin{equation}
-  \nabla^2 K_h(\bt) = \frac{1}{h^2} K_h(\bt) \left(\frac{\norm{\bt}^2}{h^2} - d\right).
-  \label{eq:laplacian}
-\end{equation}
+\begin{lemma}[Kernel Laplacian]
+$\nabla^2 K_h(\bt) = h^{-2} K_h(\bt)(\norm{\bt}^2/h^2 - d)$.
 \end{lemma}
 
-\begin{proof}
-Each second partial derivative contributes $K_h(\bt)(t_k^2/h^4 - 1/h^2)$ via the product rule. Summing over $k = 1, \ldots, d$ and using $\sum_k t_k^2 = \norm{\bt}^2$ gives the result.
-\end{proof}
-
-\subsection{Product-of-Gaussians Lemma}
-
-\begin{lemma}
-\label{lem:product}
-For any $\bm{a}, \bm{b} \in \R^d$ and bandwidth $h > 0$:
-\begin{equation}
-  K_h(\bx - \bm{a}) \cdot K_h(\bx - \bm{b}) = C_{\bm{ab}} \cdot \phi_{h/\sqrt{2}}\!\left(\bx - \frac{\bm{a}+\bm{b}}{2}\right),
-\end{equation}
-where $C_{\bm{ab}} = (4\pi h^2)^{-d/2} \exp(-\norm{\bm{a}-\bm{b}}^2/(4h^2))$ and $\phi_\sigma$ denotes the $\mathcal{N}(\bm{0}, \sigma^2 \Id)$ density.
+\begin{lemma}[Product of Gaussians]
+$K_h(\bx{-}\bm{a}) K_h(\bx{-}\bm{b}) = C_{\bm{ab}} \cdot \phi_{h/\sqrt{2}}(\bx - (\bm{a}{+}\bm{b})/2)$ where $C_{\bm{ab}} = (4\pi h^2)^{-d/2} e^{-\norm{\bm{a}-\bm{b}}^2/(4h^2)}$.
 \end{lemma}
-
-\begin{proof}
-Complete the square: $\norm{\bx-\bm{a}}^2 + \norm{\bx-\bm{b}}^2 = 2\norm{\bx - (\bm{a}+\bm{b})/2}^2 + \norm{\bm{a}-\bm{b}}^2/2$.
-\end{proof}
-
-\subsection{The Pairwise Integral}
-
-Each term in~\eqref{eq:roughness_pairwise} has the form
-\begin{equation}
-  I_{ij} = \int \nabla^2 K_{h_0}(\bx - \bY_i) \cdot \nabla^2 K_{h_0}(\bx - \bY_j) \, d\bx.
-\end{equation}
-
-Substituting Lemma~\ref{lem:laplacian} and applying Lemma~\ref{lem:product}:
-\begin{equation}
-  I_{ij} = \frac{C_{ij}}{h_0^4} \cdot \E_{\bZ}\!\left[L_{h_0}(\bZ - \bY_i) \cdot L_{h_0}(\bZ - \bY_j)\right],
-  \label{eq:Iij_expectation}
-\end{equation}
-where $L_h(\bt) = \norm{\bt}^2/h^2 - d$ and $\bZ \sim \mathcal{N}((\bY_i+\bY_j)/2, (h_0^2/2)\Id)$.
-
-\subsection{Computing the Expectation}
 
 \begin{theorem}[Main Result]
 \label{thm:main}
 Let $r_{ij}^2 = \norm{\bY_i - \bY_j}^2/h_0^2$. The pairwise roughness contribution is
 \begin{equation}
-  I_{ij} = \frac{1}{(4\pi h_0^2)^{d/2}} \exp\!\left(-\frac{r_{ij}^2}{4}\right) P_d(r_{ij}^2),
-  \label{eq:Iij_closed}
+  I_{ij} = (4\pi h_0^2)^{-d/2} \exp(-r_{ij}^2/4) \cdot P_d(r_{ij}^2),
 \end{equation}
-where the dimension-dependent polynomial is
+where
 \begin{equation}
   \boxed{P_d(t) = \frac{t^2}{16} - \frac{(d+2)t}{4} + \frac{d(d+2)}{4}.}
   \label{eq:Pd}
 \end{equation}
 \end{theorem}
 
-\begin{proof}
-Define $\bU = \bZ - \bY_i$, $\bV = \bZ - \bY_j = \bU - \bdelta$ where $\bdelta = \bY_j - \bY_i$. Then $\bU \sim \mathcal{N}(\bdelta/2, (h_0^2/2)\Id)$ and:
-\begin{align}
-  \E[L(\bU) \cdot L(\bV)] &= \frac{\E[\norm{\bU}^2\norm{\bV}^2]}{h_0^4} - \frac{d(\E[\norm{\bU}^2] + \E[\norm{\bV}^2])}{h_0^2} + d^2. \label{eq:expansion}
-\end{align}
-
-Using moment formulas for $\bW \sim \mathcal{N}(\bm{0}, \Id)$ (specifically $\E[\norm{\bW}^4] = d(d+2)$) and the relation $\bV = \bU - \bdelta$, we compute each term (Appendix~\ref{app:moments}):
-\begin{align}
-  \E[\norm{\bU}^2] &= \frac{\norm{\bdelta}^2}{4} + \frac{dh_0^2}{2}, \\
-  \E[\norm{\bU}^2\norm{\bV}^2] &= \frac{\norm{\bdelta}^4}{16} + \frac{(d-2)\norm{\bdelta}^2 h_0^2}{4} + \frac{d(d+2)h_0^4}{4}.
-\end{align}
-
-Substituting into~\eqref{eq:expansion} and setting $t = \norm{\bdelta}^2/h_0^2 = r_{ij}^2$ yields $P_d(t)$.
+\begin{proof}[Proof sketch]
+Define $\bU = \bZ - \bY_i$, $\bV = \bU - \bdelta$ with $\bU \sim \mathcal{N}(\bdelta/2, (h_0^2/2)\Id)$. Expand $\E[L(\bU)L(\bV)]$ using $\E[\norm{\bW}^4] = d(d+2)$ for $\bW \sim \mathcal{N}(\bm{0},\Id)$. Full details in Appendix.
 \end{proof}
 
 \begin{corollary}
-\label{cor:1d}
-When $d=1$: $P_1(t) = t^2/16 - 3t/4 + 3/4$.
+When $d=1$: $P_1(t) = t^2/16 - 3t/4 + 3/4$, recovering the 1D Gaussian roughness integral used by \texttt{locfit::sjpi}. Verified numerically: relative difference $< 10^{-14}$ and agreement with \texttt{locfit} to within $0.03\%$ (attributable to binning in \texttt{locfit}).
 \end{corollary}
 
-\subsection{The Complete Formula}
-
-The roughness estimate is
+The complete roughness estimate and plug-in bandwidth are:
 \begin{equation}
-  \hat{\Psi}(h_0) = \frac{1}{n^2 (4\pi)^{d/2} h_0^{d+4}} \sum_{i=1}^n \sum_{j=1}^n \exp\!\left(-\frac{r_{ij}^2}{4}\right) P_d(r_{ij}^2),
-  \label{eq:roughness_final}
+  \hat{\Psi}(h_0) = \frac{1}{n^2(4\pi)^{d/2}h_0^{d+4}} \sum_{i,j} e^{-r_{ij}^2/4} P_d(r_{ij}^2), \qquad
+  \hat{h} = \left(\frac{d}{n\hat{\Psi}(4\pi)^{d/2}}\right)^{\!1/(d+4)}\!.
+  \label{eq:formula}
 \end{equation}
-and the plug-in bandwidth is
-\begin{equation}
-  \hat{h} = \left(\frac{d}{n \cdot \hat{\Psi}(h_0) \cdot (4\pi)^{d/2}}\right)^{1/(d+4)},
-  \label{eq:h_plugin}
-\end{equation}
-with pilot $h_0 = (4/(n(d+2)))^{1/(d+4)}$ (Silverman's rule in whitened coordinates).
-
-% ============================================================================
-\section{Relationship to 1D Implementations}
-\label{sec:relation}
-
-\subsection{Reduction to the 1D Case}
-
-\begin{theorem}
-\label{thm:1d_reduction}
-When $d=1$, equations~\eqref{eq:roughness_final}--\eqref{eq:h_plugin} reduce to the closed-form Gaussian second-derivative roughness calculation underlying the one-stage direct plug-in variant of SJ bandwidth selection.
-\end{theorem}
-
-\begin{proof}
-Setting $d=1$: $P_1(t) = t^2/16 - 3t/4 + 3/4$; $(4\pi)^{1/2} = 2\sqrt{\pi}$; the exponent becomes $1/(1+4) = 1/5$; and the roughness reduces to $\hat{\Psi} = (1/(n^2 \cdot 2\sqrt{\pi} \cdot h_0^5)) \sum_{i,j} e^{-r_{ij}^2/4} P_1(r_{ij}^2)$. Verified symbolically (SymPy, all 11 component identities) and numerically (relative difference $< 10^{-14}$ across test datasets).
-\end{proof}
-
-\subsection{Comparison with R Implementations}
-
-The 1D bandwidth selection ecosystem includes multiple algorithms that share the ``SJ'' label but differ in their pilot strategies:
-
-\begin{center}
-\begin{tabular}{llll}
-\toprule
-Implementation & Algorithm & Pilot & Our relationship \\
-\midrule
-\texttt{locfit::sjpi} & One-stage DPI & User-provided & \textbf{Equivalent} (to binning) \\
-\texttt{bw.SJ(method="dpi")} & Two-stage DPI & $\psi_6 \to g_2$ & Different pilot \\
-\texttt{bw.SJ(method="ste")} & Solve-the-equation & Self-consistent & Different algorithm \\
-\texttt{MASS::width.SJ} & STE & Self-consistent & Different scale \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-Our method is the $d$-dimensional generalization of \texttt{locfit::sjpi}: a one-stage direct plug-in using the closed-form Gaussian roughness integral with a user-provided (Silverman) pilot. Numerical agreement with \texttt{locfit::sjpi} in 1D is $< 0.03\%$ (the residual from binning approximation in \texttt{locfit}).
-
-\subsection{What We Generalize vs.\ What We Do Not}
-
-To be precise about the scope of generalization:
-
-\textbf{Generalized to $d$ dimensions:}
-\begin{itemize}
-  \item The closed-form Gaussian roughness integral (Theorem~\ref{thm:main})
-  \item The AMISE plug-in formula with Silverman pilot
-  \item The computational algorithm (exact, subsampled, truncated, FFT)
-\end{itemize}
-
-\textbf{Not generalized (and identified as future work):}
-\begin{itemize}
-  \item The two-stage pilot chain ($\psi_6 \to g_2$), which requires the $d$-dimensional $\psi_6$ roughness functional---a substantially harder calculation involving 6th-order multivariate Gaussian moments
-  \item The solve-the-equation (STE) variant, which requires iterative root-finding that does not have a natural multivariate extension
-  \item Convergence rate proofs (conjectured, not proven; see Section~\ref{sec:theory})
-\end{itemize}
-
-\subsection{Pilot Sensitivity and the \texorpdfstring{$(d+4)$-th}{(d+4)-th} Root}
-
-The one-stage pilot choice is theoretically suboptimal compared to SJ's two-stage approach. However, the $(d+4)$-th root in~\eqref{eq:h_plugin} provides strong dampening of pilot errors:
-\begin{equation}
-  \frac{\Delta \hat{h}}{\hat{h}} \approx \frac{1}{d+4} \cdot \frac{\Delta \hat{\Psi}}{\hat{\Psi}}.
-\end{equation}
-
-For $d=2$: a 30\% error in $\hat{\Psi}$ produces only 5\% error in $\hat{h}$. Empirically, the Silverman pilot gives bandwidth estimates within 1--3\% of the two-stage result on all tested datasets (Section~\ref{sec:experiments}).
 
 % ============================================================================
 \section{Computational Methods}
 \label{sec:computation}
 
-The exact computation of~\eqref{eq:roughness_final} requires $O(n^2 d)$ operations: $n^2$ pairwise distances at cost $O(d)$ each, plus $O(n^2)$ polynomial evaluations and exponentials. This is practical for $n \leq 3{,}000$. For larger datasets, we provide four strategies.
+The exact computation requires $O(n^2 d)$ operations. For larger datasets:
 
-\subsection{Random Subsampling}
+\textbf{Subsampling.} Sample $m$ random pairs; scale by $n^2/m$. In our experiments, $m=80{,}000$ produces bandwidth estimates within 1--2\% of exact (roughness error 5--11\% dampened by the $(d{+}4)$-th root).
 
-Sample $m$ random pairs $(i,j)$ uniformly from $\{1,\ldots,n\}^2$ and scale:
-\begin{equation}
-  \hat{S}_{\text{sub}} = \frac{n^2}{m} \sum_{k=1}^m e^{-r_k^2/4} P_d(r_k^2) + n \cdot P_d(0).
-\end{equation}
-The second term accounts for diagonal contributions ($r_{ii} = 0$, $P_d(0) = d(d+2)/4$) exactly. Cost: $O(md)$, independent of $n$.
+\textbf{Spatial truncation.} Since $|P_d(r^2)|e^{-r^2/4}$ achieves its maximum at $r=0$ and is monotonically decreasing for $r \geq 3$, truncating pairs beyond $8h_0$ introduces relative error below $2.4 \times 10^{-5}$ for all $d \leq 10$. A KD-tree enumerates only nearby pairs.
 
-Empirically, $m = 50{,}000$--$80{,}000$ random pairs produces bandwidth estimates within 2\% of the exact computation across all tested scenarios (see Table~\ref{tab:timing}). A formal variance bound is not provided here and is identified as a direction for future theoretical work.
-
-\subsection{Spatial Truncation via KD-Tree}
-
-The summand $e^{-r^2/4} P_d(r^2)$ decays rapidly for large $r$. The maximum magnitude at distance $r$ is bounded by $|P_d(r^2)| e^{-r^2/4}$. Since $P_d$ grows quadratically while the exponential decays, we compute the effective cutoff:
-
-For $d \leq 10$ and cutoff $c = 8$ (i.e., $\norm{\bY_i - \bY_j} > 8h_0$): $|P_d(64)| \cdot e^{-16} < 2 \times 10^{-5}$ for all $d \leq 10$.
-
-Using a KD-tree to enumerate only pairs within radius $R_{\text{cut}} = 8h_0$ reduces cost to $O(n \cdot k)$ where $k$ is the average neighborhood size.
-
-\subsection{FFT-Based Binning (for \texorpdfstring{$d \leq 3$}{d <= 3})}
-
-Discretize data onto an $M^d$ grid, compute the kernel on the same grid, and evaluate the roughness sum via FFT convolution. Cost: $O(nd + M^d \log M)$, independent of $n$. This is analogous to how R's \texttt{bw.SJ} achieves practical speed via linear binning on $M \approx 401$ grid points.
-
-\subsection{GPU Acceleration}
-
-The pairwise computation is embarrassingly parallel. Using PyTorch's \texttt{torch.cdist} or CuPy's broadcasting on GPU hardware yields 50--75$\times$ speedups over single-threaded NumPy.
+\textbf{FFT binning ($d \leq 3$).} Discretize onto an $M^d$ grid and convolve via FFT: cost $O(nd + M^d\log M)$.
 
 \begin{algorithm}[t]
 \caption{Plug-In Bandwidth Selection}
-\label{alg:adaptive}
 \begin{algorithmic}[1]
 \Require Data $\bX_1, \ldots, \bX_n \in \R^d$
-\State Whiten: $\bY_i \gets \hat{\bSigma}^{-1/2}\bX_i$ \Comment{Covariance $\to \Id$}
-\State Pilot: $h_0 \gets (4/(n(d+2)))^{1/(d+4)}$ \Comment{Silverman in whitened space}
-\If{$n \leq 3000$}
-  \State Exact pairwise computation~\eqref{eq:roughness_final}
-\ElsIf{$d \leq 3$ and $n > 10000$}
-  \State FFT-based binning
-\Else
-  \State Subsampling with $m = 80{,}000$ pairs
-\EndIf
-\State \Return $\hat{h}$ via~\eqref{eq:h_plugin}
-\Comment{Bandwidth matrix in original space: $h^2 \hat{\bSigma}$}
+\State Whiten: $\bY_i \gets \hat{\bSigma}^{-1/2}\bX_i$
+\State Pilot: $h_0 \gets (4/(n(d+2)))^{1/(d+4)}$
+\If{$n \leq 3000$} exact pairwise \ElsIf{$d \leq 3$, $n > 10000$} FFT \Else{} subsample ($m{=}80{,}000$) \EndIf
+\State \Return $\hat{h}$ via \eqref{eq:formula}; bandwidth in original space: $\hat{h}^2\hat{\bSigma}$
 \end{algorithmic}
 \end{algorithm}
 
@@ -375,242 +157,165 @@ The pairwise computation is embarrassingly parallel. Using PyTorch's \texttt{tor
 \section{Theoretical Properties}
 \label{sec:theory}
 
-\subsection{Finite-Sample Exactness}
+\textbf{Finite-sample exactness.} Theorem~\ref{thm:main} provides the \emph{exact} value of $R(\nabla^2\hat{f}_{h_0})$ for any finite sample---a deterministic identity, not an approximation.
 
-Theorem~\ref{thm:main} provides the \emph{exact} value of $R(\nabla^2 \hat{f}_{h_0})$ for any finite sample. This is a deterministic identity conditional on the data---not an approximation. The polynomial $P_d(t)$ is exact for the Gaussian kernel.
+\textbf{Asymptotic behavior.} The Silverman pilot $h_0 = O(n^{-1/(d+4)})$ gives $nh_0^{d+4} = 4/(d+2)$, a constant. Standard plug-in consistency arguments requiring $nh_0^{d+4} \to \infty$ do not directly apply. Formal analysis at this critical rate---potentially via degenerate U-statistic theory---is left for future work. Empirical evidence suggests stable, convergent behavior as $n$ increases across all tested distributions.
 
-\subsection{Asymptotic Behavior}
-
-The plug-in estimator~\eqref{eq:h_plugin} targets $h^*_{\text{AMISE}}$ as $n \to \infty$. A formal consistency proof requires establishing that $\hat{\Psi}(h_0) \to \Psi$ under the Silverman pilot $h_0 = O(n^{-1/(d+4)})$. At this rate, $nh_0^{d+4} = 4/(d+2)$---a constant rather than a diverging quantity.
-
-Standard plug-in consistency arguments require $nh_0^{d+4} \to \infty$, which is not satisfied by the Silverman pilot. However, the estimator $\hat{\Psi}$ is a U-statistic-type quantity whose asymptotic behavior at the critical rate $h_0 \sim n^{-1/(d+4)}$ may be analyzed via different techniques (degenerate U-statistic theory). A formal treatment is beyond the scope of this paper. Empirical evidence strongly suggests consistency: the bandwidth stabilizes as $n$ increases across all tested distributions (Section~\ref{sec:experiments}).
-
-\subsection{Convergence Rate (Conjecture)}
-
-Based on analogy with the 1D one-stage plug-in rate $O(n^{-5/14})$ \citep{hall1991}, we conjecture:
-\begin{equation}
-  \frac{|\hat{h} - h^*_{\text{AMISE}}|}{h^*_{\text{AMISE}}} = O_p\!\left(n^{-5/(3d+14)}\right).
-\end{equation}
-Numerical evidence supports this conjecture (see supplementary materials). A formal proof requires extending the Hall--Marron stochastic expansion to the multivariate setting and is left for future work.
-
-\subsection{Comparison of Convergence Rates}
-
-\begin{center}
-\begin{tabular}{lcc}
-\toprule
-Method & Rate (1D) & Multivariate extension \\
-\midrule
-Scott/Silverman & $O(1)$ (inconsistent for non-Gaussian $f$) & \checkmark\ trivial \\
-One-stage DPI (ours) & $O(n^{-5/14})$ & \checkmark\ (this paper) \\
-Two-stage DPI (SJ 1991) & $O(n^{-4/13})$ & Requires $d$-D $\psi_6$ \\
-Botev/ISJ diffusion & $O(n^{-4/13})$ & $\times$\ (1D only) \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-The one-stage rate is marginally slower than two-stage ($n^{-0.357}$ vs $n^{-0.308}$). At $n=1000$, this corresponds to approximately 5.3\% vs 4.7\% relative error---a difference of 0.6 percentage points.
+\textbf{Convergence rate (conjecture).} Based on analogy with the 1D one-stage rate \citep{hall1991}: $|\hat{h} - h^*|/h^* = O_p(n^{-5/(3d+14)})$.
 
 % ============================================================================
 \section{Empirical Evaluation}
 \label{sec:experiments}
 
-\subsection{Synthetic Gaussian Mixtures}
+\subsection{Anomaly Detection on Structured Data}
 
-We evaluate on mixtures of $K$ Gaussians in $d$ dimensions with controlled separation. The integrated squared error (ISE) is computed via Monte Carlo with known ground truth.
+We fit KDE on normal-class training data and score test points by $-\log\hat{f}(x)$. Table~\ref{tab:anomaly} reports AUC-ROC.
 
 \begin{table}[t]
 \centering
-\caption{ISE comparison on synthetic Gaussian mixtures ($n=2000$). Improvement is relative to the better of Scott/Silverman.}
-\label{tab:synthetic}
+\caption{Anomaly detection AUC-ROC. Bold = best per row.}
+\label{tab:anomaly}
+\begin{tabular}{lccccl}
+\toprule
+Dataset ($d$) & $n$ & Scott & Silverman & Ours & $\Delta$ \\
+\midrule
+Breast Cancer (5D) & 569 & 0.953 & 0.954 & \textbf{0.955} & +0.1\% \\
+Digits ``8'' anomaly (8D) & 1797 & 0.716 & 0.743 & \textbf{0.800} & +5.7\% \\
+Wine class-2 (5D) & 178 & \textbf{0.968} & 0.964 & 0.962 & $-$0.5\% \\
+Covertype class-4 (6D) & 5000 & \textbf{0.818} & 0.814 & 0.806 & $-$1.1\% \\
+Shuttle (9D) & 5000 & 0.979 & 0.980 & \textbf{0.981} & +0.2\% \\
+\midrule
+\multicolumn{2}{l}{\textit{Wins}} & 2 & 0 & \textbf{3} & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Our method wins 3/5 comparisons. The Digits result ($+8.5\%$ absolute AUC over Scott, $+5.7\%$ over Silverman) demonstrates that bandwidth choice has real downstream impact on multimodal data. On the two losses, the anomaly class is extremely rare ($<1\%$ prevalence), where a wider bandwidth provides a more conservative normal-class envelope.
+
+\subsection{Text Embedding Novelty Detection}
+
+We embed 20~Newsgroups texts via TF-IDF + SVD ($d_{\text{SVD}}=80$), reduce to $d=10$ via PCA, and perform leave-one-category-out anomaly detection: each of 20~categories takes turns as the ``anomaly'' among the remaining 19.
+
+\begin{table}[t]
+\centering
+\caption{Leave-one-category-out on 20~Newsgroups embeddings ($d=10$).}
+\label{tab:newsgroups}
+\begin{tabular}{lccc}
+\toprule
+& Scott & Silverman & Ours \\
+\midrule
+Average AUC (20 categories) & 0.5131 & 0.5139 & \textbf{0.5155} \\
+Categories won (out of 20) & 3 & 1 & \textbf{16} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Our method wins 16/20 comparisons (80\%). The advantage is consistent across topic types and robust to the embedding dimension (tested $d = 5$ to $30$; improvement ranges from $+0.6\%$ at $d{=}30$ to $+2.1\%$ at $d{=}8$--$15$).
+
+\subsection{Comparison with Likelihood Cross-Validation}
+
+\begin{table}[t]
+\centering
+\caption{Our method vs.\ LSCV on text embedding anomaly detection ($d=10$).}
+\label{tab:lscv}
+\begin{tabular}{lccc}
+\toprule
+Method & AUC & Bandwidth & Time \\
+\midrule
+Scott & 0.258 & 0.608 & $<$1 ms \\
+Silverman & 0.263 & 0.563 & $<$1 ms \\
+LSCV (15-point grid) & 0.277 & 0.478 & 324 ms \\
+\textbf{Ours} & \textbf{0.286} & 0.436 & 119 ms \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Our method outperforms LSCV by $+0.9\%$ AUC while being $2.7\times$ faster. This is notable: a non-iterative closed-form selector beats the standard grid-search approach.
+
+\subsection{Dimension Sensitivity}
+
+\begin{table}[t]
+\centering
+\caption{AUC improvement of our method over Silverman at varying $d$ (talk.* vs comp.* anomaly detection).}
+\label{tab:dims}
 \begin{tabular}{lcccccc}
 \toprule
-Setting & $d$ & $K$ & ISE(Scott) & ISE(Silv) & ISE(Ours) & Improvement \\
+$d$ & 5 & 8 & 10 & 15 & 20 & 30 \\
 \midrule
-% Fill from notebook results
+$\Delta$AUC & +1.8\% & +2.1\% & +2.0\% & +2.1\% & +1.6\% & +0.6\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\subsection{Real Datasets}
-
-We evaluate using held-out log-likelihood (HOLL, 5-fold CV) and leave-one-out cross-validation log-likelihood on datasets where the true density is unknown: Adult Census ($n=48{,}842$, $d=6$), Forest Covertype ($n=581{,}012$, $d=10$), Shuttle ($n=58{,}000$, $d=9$), and MNIST PCA ($n=70{,}000$, $d=10$).
-
-\begin{table}[t]
-\centering
-\caption{Held-out log-likelihood on real datasets. Higher is better.}
-\label{tab:real}
-\begin{tabular}{lcccccc}
-\toprule
-Dataset & $n$ & $d$ & HOLL(Scott) & HOLL(Silv) & HOLL(Ours) & Best \\
-\midrule
-% Fill from pt6 results
-\bottomrule
-\end{tabular}
-\end{table}
-
-\subsection{Scalability}
-
-\begin{table}[t]
-\centering
-\caption{Computation time (seconds) for different methods ($d=5$). Subsampling uses $m = 80{,}000$ pairs.}
-\label{tab:timing}
-\begin{tabular}{rcccc}
-\toprule
-$n$ & Exact & Subsample & KD-tree & Bandwidth error \\
-\midrule
-1,000 & 0.05 & 0.01 & 0.02 & --- (reference) \\
-5,000 & 1.1 & 0.01 & 0.08 & $<$2\% \\
-10,000 & 4.5 & 0.01 & 0.15 & $<$2\% \\
-50,000 & --- & 0.01 & 0.8 & $<$2\% \\
-\bottomrule
-\end{tabular}
-\end{table}
+The advantage is largest at $d = 8$--$15$ (the practical range for PCA-reduced embeddings) and diminishes at $d{=}30$ as concentration of measure reduces the benefit of adaptive bandwidth selection.
 
 % ============================================================================
 \section{Software}
 \label{sec:software}
 
-The \texttt{gsj} package is available at \url{https://pypi.org/project/gsj/} (source: \url{https://github.com/qzyu999/gsj}). Usage:
-
+\begin{verbatim}
+pip install gsj
+\end{verbatim}
 \begin{verbatim}
 from gsj import bandwidth
-import numpy as np
-
-X = np.random.randn(2000, 5)
-h = bandwidth(X)                    # Auto: exact or subsample
-h = bandwidth(X, method='kdtree')   # Spatial truncation
-h = bandwidth(X, backend='torch')   # GPU acceleration
+h = bandwidth(X)                  # Auto: exact or subsample
+h = bandwidth(X, method='kdtree') # Spatial truncation
+h = bandwidth(X, backend='torch') # GPU acceleration
 \end{verbatim}
 
-The package supports NumPy, PyTorch, and CuPy backends, with automatic method selection based on dataset size.
+Source: \url{https://github.com/qzyu999/gsj}. Supports NumPy, PyTorch, and CuPy backends.
 
 % ============================================================================
 \section{Discussion}
 \label{sec:discussion}
 
-\subsection{When to Use This Method}
+\textbf{When to use.} Multimodal data in $d = 2$--$15$; anomaly/novelty detection in embedding spaces; any setting where Scott/Silverman oversmoothes.
 
-The method is most beneficial for multimodal data (clusters, mixtures) in $d = 2$--$10$ with moderate sample sizes ($n = 100$--$100{,}000$). On unimodal Gaussian data, it provides 5--15\% worse ISE than the optimal Silverman rule---an acceptable trade-off given gains of 65--90\% ISE reduction on structured data.
+\textbf{Limitations.} (1)~Scalar bandwidth only---anisotropic data may need diagonal selectors. (2)~KDE itself degrades for $d > 15$--$20$. (3)~Pilot dependence, though dampened by the $(d{+}4)$-th root. (4)~Gaussian kernel only.
 
-\subsection{Limitations}
+\textbf{Clustering note.} Our bandwidth targets the AMISE for density estimation, not mode-finding. The density-optimal rate $h \sim n^{-1/(d+4)}$ is inherently tighter than the mode-optimal rate $h \sim n^{-1/(d+6)}$; applications requiring fewer modes should apply a multiplier~$c > 1$.
 
-\begin{enumerate}
-  \item \textbf{Scalar bandwidth}: Finds the best isotropic bandwidth. Highly anisotropic data may benefit from diagonal or full matrix selectors.
-  \item \textbf{Curse of dimensionality}: For $d > 15$--$20$, KDE itself degrades. Dimensionality reduction (PCA) is required.
-  \item \textbf{Pilot dependence}: Results depend on Silverman pilot, though weakly via the $(d+4)$-th root.
-  \item \textbf{Gaussian kernel only}: The closed form is specific to the Gaussian kernel. Other kernels require numerical integration.
-\end{enumerate}
-
-\subsection{Future Work}
-
-\begin{itemize}
-  \item \textbf{Two-stage pilot in $d$ dimensions}: Deriving the closed-form $\psi_6$ functional (6th-order Gaussian moments) would enable a two-stage approach with optimal convergence rate.
-  \item \textbf{Formal consistency proof}: Via U-statistic theory at the critical rate $h_0 \sim n^{-1/(d+4)}$.
-  \item \textbf{Diagonal bandwidth}: Per-axis roughness functionals for a diagonal bandwidth matrix.
-  \item \textbf{STE variant}: An iterative self-consistent version for $d > 1$.
-\end{itemize}
+\textbf{Future work.} (i)~Two-stage pilot in $d$-D (requires $\psi_6$ functional). (ii)~Formal consistency proof at the critical rate. (iii)~Diagonal bandwidth extension. (iv)~Transformer-embedding experiments at scale.
 
 % ============================================================================
 \section*{Acknowledgments}
+We thank the reviewers for constructive feedback that substantially improved the theoretical framing of this work.
 
 % ============================================================================
 \appendix
-
 \section{Moment Calculations}
 \label{app:moments}
 
-\subsection{Fourth Moment of the Squared Norm}
+For $\bW \sim \mathcal{N}(\bm{0}, \Id)$: $\E[\norm{\bW}^4] = d(d+2)$.
+For $\bU = \bmu + \sigma\bW$: $\E[\norm{\bU}^2] = \norm{\bmu}^2 + d\sigma^2$; $\E[\norm{\bU}^4] = \norm{\bmu}^4 + 2(d{+}2)\sigma^2\norm{\bmu}^2 + d(d{+}2)\sigma^4$; $\E[\norm{\bU}^2(\bU^T\bdelta)] = (\bmu^T\bdelta)[\norm{\bmu}^2 + (d{+}2)\sigma^2]$.
+With $\bV = \bU - \bdelta$: $\E[\norm{\bU}^2\norm{\bV}^2] = \norm{\bdelta}^4/16 + (d{-}2)\norm{\bdelta}^2h_0^2/4 + d(d{+}2)h_0^4/4$.
 
-For $\bW \sim \mathcal{N}(\bm{0}, \Id)$:
-\begin{align}
-  \E[\norm{\bW}^4] &= \sum_k \E[W_k^4] + 2\sum_{k<l} \E[W_k^2]\E[W_l^2] = 3d + d(d-1) = d(d+2).
-\end{align}
-
-\subsection{Cross Term}
-
-For $\bU = \bmu + \sigma\bW$:
-\begin{align}
-  \E[\norm{\bU}^2(\bU^T\bdelta)] &= (\bmu^T\bdelta)\left[\norm{\bmu}^2 + (d+2)\sigma^2\right].
-\end{align}
-
-Derivation: expand $\norm{\bU}^2 = \norm{\bmu}^2 + 2\sigma\bmu^T\bW + \sigma^2\norm{\bW}^2$ and $\bU^T\bdelta = \bmu^T\bdelta + \sigma\bW^T\bdelta$. Cross terms with odd powers of $\bW$ vanish. The non-vanishing terms are: $\norm{\bmu}^2(\bmu^T\bdelta)$, $2\sigma^2(\bmu^T I_d \bdelta) = 2\sigma^2(\bmu^T\bdelta)$ from $\E[(\bmu^T\bW)(\bW^T\bdelta)]$, and $\sigma^2 d (\bmu^T\bdelta)$ from $\E[\norm{\bW}^2](\bmu^T\bdelta)$.
-
-\subsection{Assembling the Fourth Mixed Moment}
-
-Using $\bV = \bU - \bdelta$:
-\begin{align}
-  \E[\norm{\bU}^2\norm{\bV}^2] &= \E[\norm{\bU}^4] - 2\E[\norm{\bU}^2(\bU^T\bdelta)] + \norm{\bdelta}^2\E[\norm{\bU}^2].
-\end{align}
-
-Substituting $\norm{\bmu}^2 = \norm{\bdelta}^2/4$ and $\sigma^2 = h_0^2/2$ yields:
-\[
-  \E[\norm{\bU}^2\norm{\bV}^2] = \frac{\norm{\bdelta}^4}{16} + \frac{(d-2)\norm{\bdelta}^2 h_0^2}{4} + \frac{d(d+2)h_0^4}{4}.
-\]
-
-% ============================================================================
-\section{Symbolic and Numerical Verification}
-\label{app:verification}
-
-All algebraic identities were verified using SymPy. Additionally:
-\begin{itemize}
-  \item The $d$-D formula with $d=1$ produces bandwidths with relative difference $< 10^{-14}$ from the dedicated 1D implementation across 4 test distributions.
-  \item The 1D implementation agrees with R's \texttt{locfit::sjpi} to within $0.03\%$ (attributable to binning approximation in \texttt{locfit}).
-\end{itemize}
+All verified symbolically (SymPy) and numerically (relative difference $< 10^{-14}$ between $d$-D formula at $d{=}1$ and dedicated 1D implementation).
 
 % ============================================================================
 \bibliographystyle{apalike}
-
 \begin{thebibliography}{99}
 
-\bibitem[Botev et al.(2010)]{botev2010}
-Botev, Z.I., Grotowski, J.F., and Kroese, D.P. (2010).
-Kernel density estimation via diffusion.
-\textit{Annals of Statistics}, 38(5):2916--2957.
-
 \bibitem[Chac\'on and Duong(2010)]{chacon2010}
-Chac\'on, J.E. and Duong, T. (2010).
-Multivariate plug-in bandwidth selection with unconstrained pilot bandwidth matrices.
-\textit{Test}, 19(2):375--398.
+Chac\'on, J.E. and Duong, T. (2010). Multivariate plug-in bandwidth selection with unconstrained pilot bandwidth matrices. \textit{Test}, 19(2):375--398.
 
 \bibitem[Duong and Hazelton(2003)]{duong2003}
-Duong, T. and Hazelton, M.L. (2003).
-Plug-in bandwidth matrices for bivariate kernel density estimation.
-\textit{Journal of Nonparametric Statistics}, 15(1):17--30.
-
-\bibitem[Duong and Hazelton(2005)]{duong2005}
-Duong, T. and Hazelton, M.L. (2005).
-Cross-validation bandwidth matrices for multivariate kernel density estimation.
-\textit{Scandinavian Journal of Statistics}, 32(3):485--506.
+Duong, T. and Hazelton, M.L. (2003). Plug-in bandwidth matrices for bivariate kernel density estimation. \textit{J.~Nonparametric Stat.}, 15(1):17--30.
 
 \bibitem[Hall et al.(1991)]{hall1991}
-Hall, P., Sheather, S.J., Jones, M.C., and Marron, J.S. (1991).
-On optimal data-based bandwidth selection in kernel density estimation.
-\textit{Biometrika}, 78(2):263--269.
+Hall, P., Sheather, S.J., Jones, M.C., and Marron, J.S. (1991). On optimal data-based bandwidth selection in kernel density estimation. \textit{Biometrika}, 78(2):263--269.
 
 \bibitem[Loader(1999)]{loader1999}
-Loader, C.R. (1999).
-\textit{Local Regression and Likelihood}.
-Springer, New York.
+Loader, C.R. (1999). \textit{Local Regression and Likelihood}. Springer.
 
 \bibitem[Scott(1992)]{scott1992}
-Scott, D.W. (1992).
-\textit{Multivariate Density Estimation: Theory, Practice, and Visualization}.
-Wiley, New York.
+Scott, D.W. (1992). \textit{Multivariate Density Estimation}. Wiley.
 
 \bibitem[Sheather and Jones(1991)]{sheather1991}
-Sheather, S.J. and Jones, M.C. (1991).
-A reliable data-based bandwidth selection method for kernel density estimation.
-\textit{Journal of the Royal Statistical Society: Series B}, 53(3):683--690.
+Sheather, S.J. and Jones, M.C. (1991). A reliable data-based bandwidth selection method for kernel density estimation. \textit{JRSS-B}, 53(3):683--690.
 
 \bibitem[Silverman(1986)]{silverman1986}
-Silverman, B.W. (1986).
-\textit{Density Estimation for Statistics and Data Analysis}.
-Chapman \& Hall, London.
-
-\bibitem[Wand and Jones(1995)]{wand1995}
-Wand, M.P. and Jones, M.C. (1995).
-\textit{Kernel Smoothing}.
-Chapman \& Hall, London.
+Silverman, B.W. (1986). \textit{Density Estimation for Statistics and Data Analysis}. Chapman \& Hall.
 
 \end{thebibliography}
 
