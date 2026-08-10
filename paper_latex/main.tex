@@ -248,7 +248,7 @@ The key observation: since $\hat{h} \propto \hat{\Psi}^{-1/(d+4)}$, a relative e
 
 The Gaussian weight $\exp(-r_{ij}^2/4)$ decays rapidly: for $r_{ij} > 6$ (i.e., $\norm{\bX_i - \bX_j} > 6h_0$), contributions are below $10^{-4}$. Using a KD-tree to enumerate only pairs within radius $R_{\text{cut}} = 6h_0$ reduces cost to $O(n \cdot k)$ where $k$ is the average neighborhood size.
 
-\subsection{FFT-Based Binning (for $d \leq 3$)}
+\subsection{FFT-Based Binning (for \texorpdfstring{$d \leq 3$}{d <= 3})}
 
 Discretize data onto an $M^d$ grid, compute the kernel on the same grid, and evaluate the roughness sum via FFT convolution. Cost: $O(nd + M^d \log M)$, independent of $n$.
 
@@ -441,7 +441,7 @@ For $\bW \sim \mathcal{N}(\bm{0}, \Id)$:
   &= 3d + d(d-1) = d(d+2).
 \end{align}
 
-\subsection{Cross Term $\E[\norm{\bU}^2(\bU^T\bdelta)]$}
+\subsection{Cross Term \texorpdfstring{$\E[\|\bU\|^2(\bU^T\bdelta)] $}{E[||U||^2(U^T delta)]}}
 
 For $\bU = \bmu + \sigma\bW$:
 \begin{align}
@@ -450,7 +450,7 @@ For $\bU = \bmu + \sigma\bW$:
 
 Proof expands $\norm{\bU}^2 = \norm{\bmu}^2 + 2\sigma\bmu^T\bW + \sigma^2\norm{\bW}^2$ and $\bU^T\bdelta = \bmu^T\bdelta + \sigma\bW^T\bdelta$, then uses $\E[\bW] = \bm{0}$, $\E[\bW\bW^T] = \Id$, and $\E[(\bmu^T\bW)\norm{\bW}^2] = 0$.
 
-\subsection{Assembling $\E[\norm{\bU}^2\norm{\bV}^2]$}
+\subsection{Assembling \texorpdfstring{$\E[\|\bU\|^2\|\bV\|^2]$}{E[||U||^2 ||V||^2]}}
 
 Using $\bV = \bU - \bdelta$ and expanding $\norm{\bV}^2 = \norm{\bU}^2 - 2\bU^T\bdelta + \norm{\bdelta}^2$:
 \begin{align}
