@@ -1,0 +1,224 @@
+{
+  "leave_one_out": [
+    {
+      "category": "alt.atheism",
+      "d": 10,
+      "Scott": 0.46228199999999997,
+      "Silverman": 0.462498,
+      "GSJ": 0.46272199999999997,
+      "best": "GSJ"
+    },
+    {
+      "category": "comp.graphics",
+      "d": 10,
+      "Scott": 0.583616,
+      "Silverman": 0.585592,
+      "GSJ": 0.5880759999999999,
+      "best": "GSJ"
+    },
+    {
+      "category": "comp.os.ms-windows.misc",
+      "d": 10,
+      "Scott": 0.608884,
+      "Silverman": 0.608796,
+      "GSJ": 0.608244,
+      "best": "Scott"
+    },
+    {
+      "category": "comp.sys.ibm.pc.hardware",
+      "d": 10,
+      "Scott": 0.645148,
+      "Silverman": 0.6461239999999999,
+      "GSJ": 0.6473840000000001,
+      "best": "GSJ"
+    },
+    {
+      "category": "comp.sys.mac.hardware",
+      "d": 10,
+      "Scott": 0.655612,
+      "Silverman": 0.656548,
+      "GSJ": 0.658704,
+      "best": "GSJ"
+    },
+    {
+      "category": "comp.windows.x",
+      "d": 10,
+      "Scott": 0.530348,
+      "Silverman": 0.530676,
+      "GSJ": 0.530144,
+      "best": "Silverman"
+    },
+    {
+      "category": "misc.forsale",
+      "d": 10,
+      "Scott": 0.5571139999999999,
+      "Silverman": 0.55859,
+      "GSJ": 0.5604659999999999,
+      "best": "GSJ"
+    },
+    {
+      "category": "rec.autos",
+      "d": 10,
+      "Scott": 0.421872,
+      "Silverman": 0.422236,
+      "GSJ": 0.42306,
+      "best": "GSJ"
+    },
+    {
+      "category": "rec.motorcycles",
+      "d": 10,
+      "Scott": 0.44736599999999993,
+      "Silverman": 0.44813000000000003,
+      "GSJ": 0.449446,
+      "best": "GSJ"
+    },
+    {
+      "category": "rec.sport.baseball",
+      "d": 10,
+      "Scott": 0.483188,
+      "Silverman": 0.4852560000000001,
+      "GSJ": 0.489272,
+      "best": "GSJ"
+    },
+    {
+      "category": "rec.sport.hockey",
+      "d": 10,
+      "Scott": 0.49410799999999994,
+      "Silverman": 0.495164,
+      "GSJ": 0.4993160000000001,
+      "best": "GSJ"
+    },
+    {
+      "category": "sci.crypt",
+      "d": 10,
+      "Scott": 0.6019559999999999,
+      "Silverman": 0.6008239999999999,
+      "GSJ": 0.597768,
+      "best": "Scott"
+    },
+    {
+      "category": "sci.electronics",
+      "d": 10,
+      "Scott": 0.480648,
+      "Silverman": 0.482476,
+      "GSJ": 0.484988,
+      "best": "GSJ"
+    },
+    {
+      "category": "sci.med",
+      "d": 10,
+      "Scott": 0.40998599999999996,
+      "Silverman": 0.412174,
+      "GSJ": 0.41645200000000004,
+      "best": "GSJ"
+    },
+    {
+      "category": "sci.space",
+      "d": 10,
+      "Scott": 0.45968000000000003,
+      "Silverman": 0.461712,
+      "GSJ": 0.46632799999999996,
+      "best": "GSJ"
+    },
+    {
+      "category": "soc.religion.christian",
+      "d": 10,
+      "Scott": 0.48375399999999996,
+      "Silverman": 0.485238,
+      "GSJ": 0.489202,
+      "best": "GSJ"
+    },
+    {
+      "category": "talk.politics.guns",
+      "d": 10,
+      "Scott": 0.4962560000000001,
+      "Silverman": 0.497004,
+      "GSJ": 0.49803600000000003,
+      "best": "GSJ"
+    },
+    {
+      "category": "talk.politics.mideast",
+      "d": 10,
+      "Scott": 0.5059260000000001,
+      "Silverman": 0.50787,
+      "GSJ": 0.5114299999999999,
+      "best": "GSJ"
+    },
+    {
+      "category": "talk.politics.misc",
+      "d": 10,
+      "Scott": 0.44594600000000006,
+      "Silverman": 0.44559799999999994,
+      "GSJ": 0.446094,
+      "best": "GSJ"
+    },
+    {
+      "category": "talk.religion.misc",
+      "d": 10,
+      "Scott": 0.487908,
+      "Silverman": 0.48612400000000006,
+      "GSJ": 0.483472,
+      "best": "Scott"
+    }
+  ],
+  "dimension_sensitivity": [
+    {
+      "d": 5,
+      "Scott": 0.258066,
+      "Silverman": 0.259134,
+      "GSJ": 0.27689800000000003
+    },
+    {
+      "d": 8,
+      "Scott": 0.250278,
+      "Silverman": 0.253454,
+      "GSJ": 0.27435
+    },
+    {
+      "d": 10,
+      "Scott": 0.27143799999999996,
+      "Silverman": 0.275634,
+      "GSJ": 0.295762
+    },
+    {
+      "d": 15,
+      "Scott": 0.31094600000000006,
+      "Silverman": 0.3191780000000001,
+      "GSJ": 0.340198
+    },
+    {
+      "d": 20,
+      "Scott": 0.37739,
+      "Silverman": 0.385682,
+      "GSJ": 0.40199
+    },
+    {
+      "d": 30,
+      "Scott": 0.543958,
+      "Silverman": 0.548054,
+      "GSJ": 0.55369
+    }
+  ],
+  "lscv_comparison": {
+    "Scott": {
+      "h": 0.6084161930946633,
+      "auc": 0.25785312499999996,
+      "time": 1.0399991879239678e-05
+    },
+    "Silverman": {
+      "h": 0.562497601217042,
+      "auc": 0.26312812500000005,
+      "time": 9.800016414374113e-06
+    },
+    "GSJ": {
+      "h": 0.4361711804229373,
+      "auc": 0.28588437499999997,
+      "time": 0.11936180002521724
+    },
+    "LSCV": {
+      "h": 0.47812296103448565,
+      "auc": 0.276671875,
+      "time": 0.32412039997871034
+    }
+  }
+}
