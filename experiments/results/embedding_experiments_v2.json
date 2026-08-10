@@ -1,0 +1,157 @@
+[
+  {
+    "experiment": "single_topic_anomaly",
+    "results": [
+      {
+        "desc": "Normal=comp* | Anomaly=rec.autos",
+        "d": 8,
+        "Scott": 0.10966559715344944,
+        "Silverman": 0.11057699723880482,
+        "GSJ": 0.11656472868814947
+      },
+      {
+        "desc": "Normal=comp* | Anomaly=rec.autos",
+        "d": 15,
+        "Scott": 0.08968549626955848,
+        "Silverman": 0.09216131652963527,
+        "GSJ": 0.0999795609853919
+      },
+      {
+        "desc": "Normal=rec* | Anomaly=comp.graphics",
+        "d": 8,
+        "Scott": 0.18532702387595662,
+        "Silverman": 0.1874134297273597,
+        "GSJ": 0.1997898646763393
+      },
+      {
+        "desc": "Normal=rec* | Anomaly=comp.graphics",
+        "d": 15,
+        "Scott": 0.14957786092952807,
+        "Silverman": 0.152927320830676,
+        "GSJ": 0.16541959801498723
+      },
+      {
+        "desc": "Normal=sci* | Anomaly=comp.graphics",
+        "d": 8,
+        "Scott": 0.26026260215785735,
+        "Silverman": 0.26105974660928916,
+        "GSJ": 0.26991437656344697
+      },
+      {
+        "desc": "Normal=sci* | Anomaly=comp.graphics",
+        "d": 15,
+        "Scott": 0.23215630104729595,
+        "Silverman": 0.23562451206535068,
+        "GSJ": 0.2491190288503026
+      },
+      {
+        "desc": "Normal=talk* | Anomaly=comp.graphics",
+        "d": 8,
+        "Scott": 0.2673611111111111,
+        "Silverman": 0.27135001156203026,
+        "GSJ": 0.2969039050757313
+      },
+      {
+        "desc": "Normal=talk* | Anomaly=comp.graphics",
+        "d": 15,
+        "Scott": 0.1903489565267661,
+        "Silverman": 0.195080356110533,
+        "GSJ": 0.2113503006127876
+      }
+    ]
+  },
+  {
+    "experiment": "domain_shift",
+    "results": [
+      {
+        "desc": "Computers \u2192 Science",
+        "d": 8,
+        "Scott": 0.13022656119529682,
+        "Silverman": 0.13095947393638319,
+        "GSJ": 0.1354539428153038
+      },
+      {
+        "desc": "Computers \u2192 Science",
+        "d": 15,
+        "Scott": 0.12532662019294932,
+        "Silverman": 0.12633373710383514,
+        "GSJ": 0.13095582760433797
+      },
+      {
+        "desc": "Recreation \u2192 Politics/Religion",
+        "d": 8,
+        "Scott": 0.40077446136320916,
+        "Silverman": 0.4031067537576212,
+        "GSJ": 0.41562186981810223
+      },
+      {
+        "desc": "Recreation \u2192 Politics/Religion",
+        "d": 15,
+        "Scott": 0.33216227704687595,
+        "Silverman": 0.33592340541344357,
+        "GSJ": 0.3492521934070127
+      }
+    ]
+  },
+  {
+    "experiment": "holl_embeddings",
+    "results": [
+      {
+        "desc": "Computers (3 cats)",
+        "d": 8,
+        "Scott": -9.38135974544672,
+        "Silverman": -9.253588064932597,
+        "GSJ": -9.122476713367318
+      },
+      {
+        "desc": "Computers (3 cats)",
+        "d": 12,
+        "Scott": -14.286205097482185,
+        "Silverman": -14.07026519511065,
+        "GSJ": -13.906262806616827
+      },
+      {
+        "desc": "Recreation (4 cats)",
+        "d": 8,
+        "Scott": -9.60235227907361,
+        "Silverman": -9.538489230298572,
+        "GSJ": -9.893369042879714
+      },
+      {
+        "desc": "Recreation (4 cats)",
+        "d": 12,
+        "Scott": -14.248730887877837,
+        "Silverman": -14.077946367018834,
+        "GSJ": -14.173724446065881
+      },
+      {
+        "desc": "Science (3 cats)",
+        "d": 8,
+        "Scott": -8.943446087177701,
+        "Silverman": -8.810581095499392,
+        "GSJ": -8.673268629591664
+      },
+      {
+        "desc": "Science (3 cats)",
+        "d": 12,
+        "Scott": -13.709242285947122,
+        "Silverman": -13.462242103736193,
+        "GSJ": -13.144281253823081
+      },
+      {
+        "desc": "Religion (3 cats)",
+        "d": 8,
+        "Scott": -9.735951443446297,
+        "Silverman": -9.664627617947014,
+        "GSJ": -9.962670470563102
+      },
+      {
+        "desc": "Religion (3 cats)",
+        "d": 12,
+        "Scott": -14.811698677590863,
+        "Silverman": -14.68335566129837,
+        "GSJ": -14.86655565616621
+      }
+    ]
+  }
+]

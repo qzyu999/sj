@@ -1,0 +1,47 @@
+[
+  {
+    "name": "Breast Cancer (PCA 5D)",
+    "n": 569,
+    "d": 5,
+    "auc_scott": 0.9528329439252335,
+    "auc_silv": 0.9535630841121496,
+    "auc_gsj": 0.9547313084112149,
+    "best": "gsj"
+  },
+  {
+    "name": "Digits '8' as anomaly (PCA 8D)",
+    "n": 1797,
+    "d": 8,
+    "auc_scott": 0.7155580075662042,
+    "auc_silv": 0.7433401639344261,
+    "auc_gsj": 0.800126103404792,
+    "best": "gsj"
+  },
+  {
+    "name": "Wine class-2 anomaly (PCA 5D)",
+    "n": 178,
+    "d": 5,
+    "auc_scott": 0.9675213675213676,
+    "auc_silv": 0.9641025641025641,
+    "auc_gsj": 0.9623931623931624,
+    "best": "scott"
+  },
+  {
+    "name": "Covertype class-4 (PCA 6D)",
+    "n": 5000,
+    "d": 6,
+    "auc_scott": 0.8177211416648037,
+    "auc_silv": 0.8136969967955884,
+    "auc_gsj": 0.8061703554661301,
+    "best": "scott"
+  },
+  {
+    "name": "Shuttle non-class-1 (9D)",
+    "n": 5000,
+    "d": 9,
+    "auc_scott": 0.9787688168599065,
+    "auc_silv": 0.9796169367753507,
+    "auc_gsj": 0.9811081929408751,
+    "best": "gsj"
+  }
+]
