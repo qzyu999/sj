@@ -311,7 +311,7 @@ To be precise about the scope of generalization:
   \item Convergence rate proofs (conjectured, not proven; see Section~\ref{sec:theory})
 \end{itemize}
 
-\subsection{Pilot Sensitivity and the $(d+4)$-th Root}
+\subsection{Pilot Sensitivity and the \texorpdfstring{$(d+4)$-th}{(d+4)-th} Root}
 
 The one-stage pilot choice is theoretically suboptimal compared to SJ's two-stage approach. However, the $(d+4)$-th root in~\eqref{eq:h_plugin} provides strong dampening of pilot errors:
 \begin{equation}
@@ -400,10 +400,10 @@ Numerical evidence supports this conjecture (see supplementary materials). A for
 \toprule
 Method & Rate (1D) & Multivariate extension \\
 \midrule
-Scott/Silverman & $O(1)$ (inconsistent for non-Gaussian $f$) & ✓ trivial \\
-One-stage DPI (ours) & $O(n^{-5/14})$ & ✓ (this paper) \\
+Scott/Silverman & $O(1)$ (inconsistent for non-Gaussian $f$) & \checkmark\ trivial \\
+One-stage DPI (ours) & $O(n^{-5/14})$ & \checkmark\ (this paper) \\
 Two-stage DPI (SJ 1991) & $O(n^{-4/13})$ & Requires $d$-D $\psi_6$ \\
-Botev/ISJ diffusion & $O(n^{-4/13})$ & ✗ (1D only) \\
+Botev/ISJ diffusion & $O(n^{-4/13})$ & $\times$\ (1D only) \\
 \bottomrule
 \end{tabular}
 \end{center}
