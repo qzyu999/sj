@@ -20,6 +20,12 @@
 
 \usepackage[doublespacing]{setspace}
 \usepackage[fontsize=12pt]{fontsize}
+
+% Fix OUP cls v1.5 bugs: \authormark and \societylogo used but undefined
+\makeatletter
+\def\authormark#1{\markboth{#1}{#1}}
+\providecommand{\societylogo}[1]{}
+\makeatother
 \usepackage{bm}
 \usepackage{algorithm}
 \usepackage{algpseudocode}
@@ -55,21 +61,26 @@
 
 \title[Closed-Form Plug-In Bandwidth for Multivariate KDE]{Closed-Form Plug-In Bandwidth Selection for Multivariate Kernel Density Estimation}
 
-\author[1,$\ast$]{Jared Yu\ORCID{0000-0000-0000-0000}}
+\providecommand{\ORCID}[1]{}
+\author[1,$\ast$]{Jared Yu}
 
 \authormark{Yu}
 
 \address[1]{\orgname{Independent Researcher}, \orgaddress{\country{United States}}}
 
-\corresp[$\ast$]{Corresponding author. \href{mailto:email@example.com}{email@example.com}}
+\corresp[$\ast$]{Corresponding author. email@example.com}
 
 %\received{Date}{0}{Year}
 %\revised{Date}{0}{Year}
 %\accepted{Date}{0}{Year}
 
-\abstract{We derive a closed-form expression for the integrated squared Laplacian roughness of an isotropic multivariate Gaussian kernel density estimator. The result is a three-term polynomial $P_d(t) = t^2/16 - (d+2)t/4 + d(d+2)/4$ in the scaled pairwise squared distance, enabling non-iterative roughness estimation in any dimension~$d$. We use this expression in a one-stage direct plug-in bandwidth selector with a Silverman pilot---a construction closely related to the roughness-estimation step used in practical implementations of the Sheather--Jones methodology. The resulting scalar bandwidth targets the asymptotic mean integrated squared error for isotropic Gaussian kernel density estimation without requiring iterative optimization or matrix bandwidth parameterization. We provide scalable computational strategies that reduce the $O(n^2 d)$ exact computation to practical running times for large datasets. Empirical evaluation demonstrates substantial improvement over rule-of-thumb selectors on multimodal data and improved anomaly detection accuracy on real datasets. The method is implemented in the open-source Python package \texttt{gsj}.}
+\abstract{We derive a closed-form expression for the integrated squared Laplacian roughness of an isotropic multivariate Gaussian kernel density estimator, enabling non-iterative bandwidth selection in any dimension.}
 
-\keywords{bandwidth selection; kernel density estimation; plug-in method; multivariate; nonparametric; AMISE; Laplacian roughness}
+\keywords{bandwidth selection, kernel density estimation, plug-in method, multivariate, nonparametric}
+
+% DEBUG: provide any missing commands
+\providecommand{\access}[1]{}
+\providecommand{\appnotes}[1]{}
 
 \maketitle
 
@@ -200,9 +211,7 @@ We thank the reviewers for constructive feedback that substantially improved the
 All datasets used are publicly available via scikit-learn and the 20~Newsgroups corpus. Code and experiments are available at \texttt{https://github.com/qzyu999/sj}.
 
 
-\begin{appendix}
-
-\section{Moment calculations}\label{app:moments}
+\section*{Appendix: Moment calculations}\label{app:moments}
 
 For $\bW \sim \mathcal{N}(\bm{0}, \Id)$: $\E[\norm{\bW}^4] = d(d+2)$.
 For $\bU = \bm{\mu} + \sigma\bW$: $\E[\norm{\bU}^2] = \norm{\bm{\mu}}^2 + d\sigma^2$; $\E[\norm{\bU}^4] = \norm{\bm{\mu}}^4 + 2(d{+}2)\sigma^2\norm{\bm{\mu}}^2 + d(d{+}2)\sigma^4$.
@@ -210,7 +219,7 @@ With $\bV = \bU - \bdelta$: $\E[\norm{\bU}^2\norm{\bV}^2] = \norm{\bdelta}^4/16 
 
 All verified symbolically (SymPy) and numerically (relative difference $< 10^{-14}$ between $d$-dimensional formula at $d{=}1$ and dedicated one-dimensional implementation; agreement with R's \texttt{locfit::sjpi} to within $0.03\%$).
 
-\end{appendix}
+% end appendix
 
 
 \begin{thebibliography}{99}
