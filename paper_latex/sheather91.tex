@@ -1,0 +1,238 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{natbib}
+\usepackage{microtype}
+\usepackage{setspace}
+\usepackage{enumitem}
+\setlength{\parindent}{1.5em}
+\setlength{\parskip}{0pt}
+\newcommand{\R}{\mathop{R}}
+\newcommand{\MISE}{\operatorname{MISE}}
+\newcommand{\MSRE}{\operatorname{MSRE}}
+\newcommand{\phiK}{\phi}
+\newcommand{\fhat}{\widehat f}
+\newcommand{\hhat}{\widehat h}
+\newcommand{\SND}{\widehat S_{\mathrm{ND}}}
+\newcommand{\SD}{\widehat S_{\mathrm{D}}}
+\newcommand{\That}{\widehat T_{\mathrm{D}}}
+\begin{document}
+
+\begin{center}
+{\Large\bfseries A Reliable Data-based Bandwidth Selection Method for Kernel Density Estimation\par}
+\vspace{0.5em}
+{\large S. J. Sheather and M. C. Jones\par}
+\vspace{0.4em}
+Journal of the Royal Statistical Society. Series B (Methodological), 53(3), 683--690 (1991)
+\end{center}
+
+\begin{abstract}
+We present a new method for data-based selection of the bandwidth in kernel density estimation which has excellent properties. It improves on a recent procedure of Park and Marron (which itself is a good method) in various ways. First, the new method has superior theoretical performance; second, it also has a computational advantage; third, the new method has reliably good performance for smooth densities in simulations, performance that is second to none in the existing literature. These methods are based on choosing the bandwidth to (approximately) minimize good quality estimates of the mean integrated squared error. The key to the success of the current procedure is the reintroduction of a non-stochastic term which was previously omitted together with use of the bandwidth to reduce bias in estimation without inflating variance.
+\end{abstract}
+
+\noindent\textbf{Keywords:} ADAPTIVE CHOICE; BIAS REDUCTION; FUNCTIONAL ESTIMATION; SMOOTHING; SQUARED ERROR LOSS FUNCTIONS
+
+\section{Introduction}
+There is currently much interest in the problem of providing good data-based procedures for selecting the smoothing parameter---which controls the degree of smoothing applied to the data---employed in statistical curve estimation techniques. This is particularly so for nonparametric probability density function estimation by the kernel method, which is described in \citet{silverman1986}, for example. In this context, we call the smoothing parameter the bandwidth and denote it by $h$.
+
+An important recent paper in this area is \citet{parkmarron1990}. Park and Marron studied an estimator, the performance of which---in both theory and simulations---proved to be clearly superior to other methods currently popular in the literature, such as the well-known ``least squares cross-validation'', for estimating smooth densities. The work of the current paper makes further advances to the methodology over and above those already made by Park and Marron (1990).
+
+The improvements that we make are on several levels. First, on the theoretical side, we improve the asymptotic rate of convergence of the estimated bandwidth to its theoretical (but practically unavailable) optimum value. Also, and this point is important because the rate improvement is only slight, we note that the constant coefficient of the leading term in the expansion of the performance measure we use is considerably reduced. Both Park and Marron's (1990) bandwidth selection procedure and our favoured one require the numerical solution of an equation; it appears that our procedure is easier to compute because the function that we need to zero is the better behaved of the two. Finally, and most importantly, it must be stressed that the bandwidth estimator that we recommend has a practical performance second to none in the existing literature on the subject. Although the simulation study presented here is rather small, we can be confident of our claim of excellent practical results because of extensive recent, but as yet unpublished, simulations of J. S. Marron which confirm the reliably good performance of our proposed procedure.
+
+\section{Park and Marron's $h$ Selector}
+The usual kernel density estimate $\fhat_h$ of a univariate density $f$ based on a random sample $X_1,\ldots,X_n$ of size $n$ is
+\begin{equation}
+\fhat_h(x)=n^{-1}\sum_{i=1}^n h^{-1}K\{h^{-1}(x-X_i)\}.
+\tag{1}
+\end{equation}
+The bandwidth $h$ has already been introduced in Section 1; the function $K$ is the kernel function which we take to be a symmetric probability density. All the data-based $h$ selection procedures discussed in this paper are based on choosing $h$ to (at least approximately) minimize a kernel-based estimate of mean integrated squared error (MISE) via the first two terms of its usual asymptotic expansion (AMISE) valid as $n\to\infty$ and $h=h(n)\to0$:
+\begin{equation}
+\MISE(h)\approx\operatorname{AMISE}(h)=(nh)^{-1}R(K)+\frac14h^4\sigma_K^4R(f''),
+\tag{2}
+\end{equation}
+where the notation follows the convention $R(g)=\int g^2(x)\,dx$ and $\sigma_g^2=\int x^2g(x)\,dx$ for appropriate functions $g$, and the quantities involved are assumed to exist and be finite. Each objective function is thus of the form
+\begin{equation}
+\psi(h)=(nh)^{-1}R(K)+\frac14h^4\sigma_K^4\widehat S(\alpha),
+\tag{3}
+\end{equation}
+where $\widehat S(\alpha)$ is a kernel-based estimate of $R(f'')$, using some appropriate bandwidth $\alpha$; $\widehat S(\alpha)$ is discussed below. Note that if $\alpha$ did not depend on $h$, the minimization of $\psi$ could be performed analytically to give
+\begin{equation}
+\widehat h=\left[\frac{R(K)}{\sigma_K^4\widehat S(\alpha)}\right]^{1/5}n^{-1/5},
+\tag{4}
+\end{equation}
+an estimate of the usual expression for the asymptotically optimal bandwidth, $h_*$, say. In its turn, $h_*$ is an approximation to $h_0$, the exact minimizer of MISE($h$).
+
+Differing in a negligible way from Park and Marron (1990), their $\widehat h$ estimator takes $\widehat S(\alpha)$ to be
+\begin{equation}
+\SND(\alpha)=\{n(n-1)\}^{-1}\alpha^{-5}\sum_{i\ne j}L^{(4)}\{\alpha^{-1}(X_i-X_j)\},
+\tag{5}
+\end{equation}
+(this derives from the estimate $n^{-1}\sum_i\fhat_h^{\prime\prime}(X_i)$ of $R(f'')$ and the subscript ND, standing for ``no diagonals'', refers to the fact that the double sum does not include $i=j$ terms). Notice that, importantly, $\alpha$ is another bandwidth differing from $h$, and that $L$ is another symmetric density not necessarily $K$. Taking $\alpha$ to be an estimate of the asymptotically optimal bandwidth $\alpha_1$, say, for estimating $R(f'')$ leads to Park and Marron's (1990) ``plug-in'' estimator of $h_0$, which develops ideas in Hall (1980) and Sheather (1983, 1986). From \citet{hallmarron1987},
+\begin{equation}
+\alpha_1=C_1(L)C_2(f)n^{-2/13}=C_3(L)C_4(f)h_*^{10/13},
+\tag{6}
+\end{equation}
+where
+\begin{align*}
+C_1(L)&=\{18R(L^{(4)})/\sigma_L^4\}^{1/13}
+=\{R(K)/\sigma_K^4\}^{2/13}C_3(L),\\
+C_2(f)&=\{R(f)/R^2(f''')\}^{1/13}=R^{-2/13}(f''')C_4(f).
+\end{align*}
+Now, $\alpha_1$ in turn depends on an unknown functional of $f$. However, at this second stage, it turns out to be sufficiently good to estimate this functional less well, in fact using a scale model for $f$, i.e. write $f=g_\lambda$, say, where $g_\lambda(x)=\lambda^{-1}g_1(\lambda^{-1}x)$, $g_1$ is a fixed density, such as the (suitably standardized) normal, and the scale parameter is estimated robustly, giving $\widehat\lambda$, say. Park and Marron's (1990) published algorithm, with which we compare the estimators to follow, is completed by considering equation (6) to give a general relationship between $\alpha$ and $h$, namely $\alpha=\alpha(h)=C_3(L)C_4(g_{\widehat\lambda})h^{10/13}$, i.e. $\alpha$ is taken to depend on $h$; then $\widehat h_1$, say, is given by that $h$, found numerically, that solves equation (4) with $\widehat h=h$, $\widehat S=\SND$ and $\alpha=\alpha(h)$.
+
+Theorem 3.3 of Park and Marron (1990) describes the asymptotic performance of $\widehat h_1$. They show that, for sufficiently smooth $f$,
+\begin{equation}
+\widehat h_1/h_0=1+O_p(n^{-4/13}),
+\tag{7}
+\end{equation}
+Moreover, the mean squared relative error (MSRE) of $\widehat h_1$ is given by
+\begin{equation}
+\begin{split}
+\mathbb E(\widehat h_1/h_0-1)^2
+&\simeq100^{-1}R^{-2}(f'')\{18R(L^{(4)})R(f)\}^{4/13}\\
+&\quad\times\{\sigma_L^2R(f''')\}^{18/13}(Q^4+4Q^{-9}/9)n^{-8/13},
+\end{split}
+\tag{8}
+\end{equation}
+where $Q=C_4(g_{\widehat\lambda})/C_4(f)$ (essentially as in Park and Marron (1990)). Note that the above rate of convergence is the best exhibited by Park and Marron and that, by and large, this superior performance carries over to (small sample) simulation results as well. Indeed, it is difficult to find another example of an automatic bandwidth selection procedure with as consistently good a simulation performance as $\widehat h_1$ in the literature.
+
+\section{An Improved $h$ Selector}
+Given that the estimates of $R(f'')$ studied in \citet{jones_sheather1991} improve, theoretically, on those of \citet{hallmarron1987} on which Park and Marron's $h$ selector is based, it is now natural to replace $\SND$ by Jones and Sheather's $\SD$ in the above. The latter estimate of $R(f'')$ is given by equation (5) with $i=j$ terms added in (the subscript D means ``diagonals in''). The difference between $\SD$ and $\SND$ is a non-stochastic term which contributes a positive amount to the bias in estimating $R(f'')$; the trick is then to recognize that the bias due to the smoothing is negative and to use the bandwidth $\alpha$ to (approximately) cancel the ``diagonal'' term with the leading smoothing bias term. The value of $\alpha$ that this leads to is $\alpha_2$, say, which, from equation (4) of Jones and Sheather (1991), is
+\begin{equation}
+\alpha_2=D_1(L)R^{-1/7}(f''')n^{-1/7},
+\tag{9}
+\end{equation}
+where
+\begin{equation}
+D_1(L)=\{2L^{(4)}(0)/\sigma_L^2\}^{1/7}.
+\end{equation}
+
+By analogy with Park and Marron's (1990) algorithm, our first $\widehat h$, denoted by $\widehat h_{2S}$, say, solves the equation
+\begin{equation}
+h=\left[\frac{R(K)}{\sigma_K^4\SD(\alpha_2(h))}\right]^{1/5}n^{-1/5},
+\end{equation}
+where, noting that $\alpha_2=c_1h_*^{5/7}$ for appropriate $c_1$, we have written $\alpha_2=\alpha_2(h)=\widehat c_1h^{5/7}$, where $\widehat c_1$ estimates $c_1$. It is tempting simply to use a scale model to estimate $c_1$ but this is not quite good enough here. The inconsistency of such an estimate (unless $g_\lambda$ is fortuitously the true $f$) means that the leading bias terms do not cancel out sufficiently well and a non-negligible bias term is reintroduced. To obtain the necessary sufficiently small bias, it turns out that we must estimate $R(f''')$ by some $\widetilde T$ such that $\widetilde T=R(f''')+O_p(n^{-1/14})$ (Jones and Sheather, 1991). Thus, any of the consistent estimators of $R(f''')$ discussed by Hall and Marron (1987) or Jones and Sheather (1991) will suffice.
+
+There are, however, various alternative options, each of which is investigated in the simulation study of Section 4. First, note that a computationally simpler and essentially asymptotically equivalent alternative estimator of $h_0$ arises by leaving $\alpha_2=c_2n^{-1/7}$, for appropriate $c_2$ as in equation (9), estimating $c_2$ and using equation (4) to give a direct formula for $\widehat h$. Call this $\widehat h_{2P}$, say. A third approach uses essentially the same device as does $\widehat h_{2S}$, in that we write $\alpha_2$ in terms of $h$, but uses it in the minimization of expression (3) rather than the solution of equation (4); this gives $\widehat h_{2M}$. Asymptotic analysis (not given) actually yields a slightly different optimal $\alpha$ in the minimization case which we utilize in practice. Although it is not theoretically necessary to do so, we find it best in practice to use optimal bandwidths in diagonals-in formulae for estimating functionals at the second stage, and estimate only the scale in these, using the same scale model ideas as in Section 2. We give full implementation details only for what proves to be the most successful of these options in Section 5. At times, we refer to any of the above estimators as $\widehat h_2$.
+
+At the (slight) expense of introducing a third stage in the above estimation procedure, we have obtained estimators $\widehat h_2$ of $h_0$ with better theoretical properties than $\widehat h_1$. This was proved by Jones and Sheather (1991). Their result 2 gives that, for $f$ little smoother than that necessary for equations (7) and (8),
+\begin{equation}
+\widehat h_2/h_0=1+O_p(n^{-5/14}),
+\tag{10}
+\end{equation}
+and that the MSRE of $\widehat h_2$ is
+\begin{equation}
+\begin{split}
+\mathbb E(\widehat h_2/h_0-1)^2
+&\simeq25^{-1}2^{-2/7}R^{-2}(f'')R(L^{(4)})\\
+&\quad\times R(f)\{\sigma_L^2R(f''')/L^{(4)}(0)\}^{9/7}n^{-5/7},
+\end{split}
+\tag{11}
+\end{equation}
+for $\widehat h_{2S}$ and $\widehat h_{2P}$, while $\widehat h_{2M}$ also has convergence rate (10) but proves to have an inferior constant coefficient of MSRE to that in approximation (11) (not given). Of course although the $O_p(n^{-5/14})$ term appearing in equation (10) guarantees $\widehat h_2$'s superiority over $\widehat h_1$---which has a corresponding $O_p(n^{-4/13})$ term in equation (7)---for sufficiently large $n$, it is not so clear what the small sample repercussions are. However, the very similarity of these rates makes it meaningful to compare constant multipliers in MSREs. Denoting these by $\eta_i$, $i=1,2$, corresponding to $\widehat h_i$, $i=1,2$, respectively ($\widehat h_2=\widehat h_{2P}$ or $\widehat h_2=\widehat h_{2S}$ here only), numerical calculation in the special case $f$ is normal (and also taking $K$ and $L$ to be normal) gives $\eta_1=0.5037$, in the case $Q=1$. (Getting $g_\lambda$ ``wrong'' increases $\eta_1$, although discarding the scale model trick for a further kernel estimation step would retain $\eta_1$ as the appropriate constant.) Such an improvement in the constant augurs well for $\widehat h_2$'s performance, too.
+
+Reverting to diagonals-in estimates $\SD$ instead of $\SND$ was originally motivated by algorithmic considerations in numerically solving equations like equation (4) for Park and Marron's (1990) $\widehat h$ selector. When using $\SND$, with a normal $L$, it was typical for $\SND<0$ for some small values of $h$. When $\SND$ changes sign, the function in the equation being zeroed has a discontinuity and changes sign. This is particularly troublesome to many root finding procedures and can mislead them into reporting this discontinuity as a solution. Such problems do not exist if we use $\SD$, since it has the great advantage that it is necessarily always positive. Plots of the relevant functions based on $\SND$ (full curve) and $\SD$ (broken curve) are given for a typical sample of size $n=100$ from the standard normal distribution in Fig.~\ref{fig:one}; the figure illustrates this computational advantage of our proposal well. Moreover, although the $\widehat h_{2S}$ function appears always to have the same shape as this one, in many cases the Park--Marron function is even more badly behaved than this, with more (discontinuous) zero crossings.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.72\textwidth]{fig1.png}
+\caption{Functions that must be zeroed: solid, for Park and Marron's (1990) method; dashed, for $\widehat h_{2S}$.}
+\label{fig:one}
+\end{figure}
+
+\section{Simulation Results}
+The simulation study reported here is rather brief. We compare all three $\widehat h_2$ proposals of Section 3 with each other and with Park and Marron's (1990) procedure, $\widehat h_1$. We took the options of setting both $K$ and $L$ to be $\phi$, the standard normal density, of using the interquartile range as $\lambda$ wherever needed and of setting $g_1(x)=1.349\,\phi(1.349x)$. For those $\widehat h$'s not given by a direct formula, we used the Newton--Raphson method to solve the required equations numerically.
+
+We generated $W=500$ realizations of data sets of size $n=50$ and $n=100$ from each of four test densities. These densities are $\phi$, the normal mean mixture
+\[
+f_1(x)=\tfrac12\phi(x+3)+\tfrac12\phi(x-3),
+\]
+and the normal variance mixtures
+\[
+f_2(x)=\tfrac34\phi(x)+\tfrac14\,\phi(\sqrt{10}\,x),
+\qquad
+f_3(x)=\tfrac12\phi(x)+\tfrac12\,\phi(\sqrt{10}\,x).
+\]
+
+In Fig.~\ref{fig:two} are shown approximate confidence intervals for the quantities
+\[
+R_h=100\{\MISE(\widehat h)/\MISE(h_0)-1\},
+\]
+where $\widehat h$ stands for any of the bandwidths of interest. $\MISE(\widehat h)$ denotes plugging the value of $\widehat h$ into the MISE formula for fixed $h$ and its use is best justified by observing that $R_h$ is essentially proportional to $\mathbb E(\widehat h/h_0-1)^2$. It is fairly widely accepted that assessing the worth of any $\widehat h$ is sensibly done by comparing $\widehat h$ with its ``target'' $h_0$ (see \citet{jones1991roles} for reasons). $R_h$, however, gives us a feel for the practical worthwhileness of any bandwidth differences. Our approximate confidence intervals are precisely the pivoted confidence intervals of Park and Marron (1990) which we denote by $(R_h/(1+V),R_h/(1-V))$. Here, $R_h$ is the obvious estimate of $R_h$ obtained from the simulations and
+\[
+V=1.96(2/W)^{1/2}=0.124.
+\]
+
+There are some interesting conclusions to be drawn from Fig.~\ref{fig:two}. Recall first that $\widehat h_1$ is considered to exhibit good performance by the current standards of the literature. Away from the normal distribution, however, $\widehat h_1$ is often considerably worse than the $\widehat h_2$'s. Of the $\widehat h_2$'s, $\widehat h_{2S}$ is never dominated by $\widehat h_1$; $\widehat h_{2P}$ does better than $\widehat h_{2S}$ for the normal and (normal-like) $f_1$ distributions, worse for $f_2$ and is considerably inferior to $\widehat h_{2S}$ for data from $f_3$. On this evidence, the consistently good performance of $\widehat h_{2S}$ suggests it as the method of choice. Further, on J. S. Marron's extensive simulation evidence, $\widehat h_{2S}$ continues to perform very well, and better than other methods tried, over a wide range of smooth density shapes.
+
+\begin{figure}[ht]
+\centering
+\includegraphics[width=0.95\textwidth]{fig2.png}
+\caption{Approximate 95\% confidence intervals for $R_h$ for each of four data-based bandwidths, for two sample sizes from each of four different underlying distributions (definitions of all these quantities are in the text).}
+\label{fig:two}
+\end{figure}
+
+\section{The $\widehat h$ of Choice}
+In Section 4, we saw that the bandwidth selection procedure resulting in $\widehat h_{2S}$ has much to recommend it. For the reader's convenience, here we give full details of the formulae for this bandwidth selector.
+
+The bandwidth $\widehat h_{2S}$, for use in equation (1), is the solution to the equation
+\begin{equation}
+\left[\frac{R(K)}{\sigma_K^4\SD(\widehat\alpha_2(h))}\right]^{1/5}n^{-1/5}-h=0
+\tag{12}
+\end{equation}
+where
+\begin{equation}
+\SD(\alpha)=\{n(n-1)\}^{-1}\alpha^{-5}
+\sum_{i=1}^n\sum_{j=1}^n \phi^{(4)}\{\alpha^{-1}(X_i-X_j)\}.
+\end{equation}
+From manipulation of equation (9), we have
+\begin{equation}
+\widehat\alpha_2(h)=1.357\left\{\frac{\SD(a)}{\widehat T_D(b)}\right\}^{1/7}h^{5/7}.
+\end{equation}
+Here, the constant is $D_1(\phi)/R^{1/7}(\phi)$ and the term in brackets is the second stage estimate of $R(f'')/R(f''')$;
+\begin{equation}
+\widehat T_D(b)=-\{n(n-1)\}^{-1}b^{-7}
+\sum_{i=1}^n\sum_{j=1}^n \phi^{(6)}\{b^{-1}(X_i-X_j)\}.
+\end{equation}
+For this estimate the bandwidths $a$ and $b$ are given by a normal scale model estimate of equation (9) and of the corresponding formula for estimating $R(f''')$ in Jones and Sheather (1991) respectively to be
+\begin{equation}
+a=0.920\,\widehat\lambda\,n^{-1/7},
+\qquad
+b=0.912\,\widehat\lambda\,n^{-1/9},
+\end{equation}
+where $\widehat\lambda$ is the sample interquartile range.
+
+We successfully use the Newton--Raphson method to solve equation (12). A Fortran subroutine is available on request from the first author.
+
+\section*{Acknowledgements}
+The authors are very grateful to Peter Hall and especially Steve Marron for many helpful comments and discussions. We also acknowledge Rob Hyndman for programming assistance in an earlier version of this work. The editorial process has been greatly beneficial in improving the standard of presentation of this material. Some of M. C. Jones's work was supported by a Mathematical Sciences Research Centre Visiting Fellowship at the Australian National University, Canberra, Australia.
+
+\begin{thebibliography}{99}
+\bibitem[Hall(1980)]{hall1980}
+Hall, P. (1980). Objective methods for the estimation of window size in the nonparametric estimation of a density. Unpublished.
+
+\bibitem[Hall and Marron(1987)]{hallmarron1987}
+Hall, P. and Marron, J. S. (1987). Estimation of integrated squared density derivatives. \emph{Statist. Probab. Lett.}, 6, 109--115.
+
+\bibitem[Jones(1991)]{jones1991roles}
+Jones, M. C. (1991). The roles of ISE and MISE in density estimation. \emph{Statist. Probab. Lett.}, to be published.
+
+\bibitem[Jones and Sheather(1991)]{jones_sheather1991}
+Jones, M. C. and Sheather, S. J. (1991). Using non-stochastic terms to advantage in kernel-based estimation of integrated squared density derivatives. \emph{Statist. Probab. Lett.}, to be published.
+
+\bibitem[Park and Marron(1990)]{parkmarron1990}
+Park, B. U. and Marron, J. S. (1990). Comparison of data-driven bandwidth selectors. \emph{J. Am. Statist. Ass.}, 85, 66--72.
+
+\bibitem[Sheather(1983)]{sheather1983}
+Sheather, S. J. (1983). A data-based algorithm for choosing the window width when estimating the density at a point. \emph{Comput. Statist. Data Anal.}, 1, 229--238.
+
+\bibitem[Sheather(1986)]{sheather1986}
+Sheather, S. J. (1986). An improved data-based algorithm for choosing the window width when estimating the density at a point. \emph{Comput. Statist. Data Anal.}, 4, 61--65.
+
+\bibitem[Silverman(1986)]{silverman1986}
+Silverman, B. W. (1986). \emph{Density Estimation for Statistics and Data Analysis}. London: Chapman and Hall.
+
+\end{thebibliography}
+\end{document}
