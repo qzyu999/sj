@@ -1,5 +1,6 @@
 # Virtual environments
 .venv/
+.venv312/
 .venv_test/
 venv/
 
@@ -44,6 +45,22 @@ paper_latex/*.toc
 
 # gsj package (has its own repo at qzyu999/gsj)
 gsj/
+
+# Large binary files
+models/
+embeddings.npz
+
+# Temp/scratch scripts
+check_pdf.py
+extract_sheather91.py
+ocr_pdf.py
+try_nougat.py
+try_nougat2.py
+sheather91_text.txt
+
+# LaTeX misc
+paper_latex/*.png
+paper_latex/test_minimal.pdf
 
 # pytest
 .pytest_cache/
