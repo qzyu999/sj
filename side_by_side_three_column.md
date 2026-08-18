@@ -176,22 +176,25 @@ Key innovation: including $i=j$ terms (positive, non-stochastic) makes $\hat S_D
 </td>
 <td>
 
-**Eq. (15)–(20): Step-by-step closed-form derivation**
+**Eq. (15)–(20) + `sheather_jones_closed_form()`: Full derivation AND implementation**
 
-The notebook derives $R(\hat f'')$ by hand:
+The notebook derives $R(\hat f'')$ by hand AND implements it in raw R code:
 
 1. Write $\hat f'' = \frac{1}{nh_0^3}\sum_i L''((x-X_i)/h_0)$
 2. Square it: product of two sums → double sum
-3. Integrate: each $L''(\cdot)L''(\cdot)$ product gives a Gaussian integral
-4. Get closed-form: involves $\phi^{(4)}((X_i-X_j)/h_0)$
+3. Integrate: Gaussian product lemma → moments of a normal
+4. Closed-form polynomial using 1st–4th moments of $\mathcal{N}(\mu, \sigma^2)$
 
-"Although the idea for the Sheather-Jones method is quite simple, the actual calculation can be quite difficult."
+The R function `sheather_jones_closed_form()` implements this from scratch:
+- Computes `mean_mu = (u+v)/2`, `sd_sigma = sqrt(h_0^2/2)` (the Gaussian product midpoint/width)
+- Evaluates moments 1–4: $\mu, \mu^2+\sigma^2, \mu^3+3\mu\sigma^2, \mu^4+6\mu^2\sigma^2+3\sigma^4$
+- Assembles a degree-4 polynomial `B_prime` in $u, v$ using these moments
+- Sums over all $(i,j)$ pairs to get the roughness
+- Plugs into $\hat h = (R(K)/(n \cdot \text{roughness}))^{1/5}$
 
-The notebook computes derivatives explicitly:
+Result: `1.673207` — matches `locfit::sjpi` (`1.672771`) to 4 significant figures.
 
-$L''(z) = \frac{-1}{\sqrt{2\pi}}e^{-z^2/2}(1-z^2)$
-
-Then integrates the product to get the closed form.
+This is NOT a black-box call — it's the complete closed-form derivation implemented from first principles.
 
 </td>
 <td>
@@ -241,11 +244,13 @@ Used in the adaptive pilot $\hat\alpha_2(h)$.
 </td>
 <td>
 
-Not derived in the notebook. The notebook uses `locfit::sjpi()` which handles this internally:
+Not derived in the notebook. The notebook uses `locfit::sjpi()` for comparison, but the ACTUAL implementation is the **closed-form function** `sheather_jones_closed_form()` which computes the roughness from scratch.
 
-"A third package called {locfit} was used... it allows for users to input a single bandwidth as the pilot bandwidth."
+The notebook's code constructs the full `outer(X, Y, ...)` matrix using moments of the Gaussian product — this IS the pairwise kernel evaluation, just written in a more expanded (pedagogical) form than SJ's compact $\phi^{(6)}$ notation.
 
-The notebook focuses on the **first-stage** closed-form ($R(\hat f'')$) and treats the two-stage pilot as a black box inside the R package.
+The notebook validates its closed-form against `locfit` (match to 4 sig figs) — proving the hand derivation is correct.
+
+What the notebook does NOT do: use this approach for the TWO-STAGE pilot (it relies on `locfit` for the inner $R(f''')$ estimation).
 
 </td>
 <td>
@@ -337,13 +342,20 @@ The function is smooth because $\hat S_D > 0$ always (diagonals-in guarantee).
 </td>
 <td>
 
-The notebook uses R packages (`locfit::sjpi`, `bw.SJ`) as black boxes for the STE:
+The notebook uses R packages (`locfit::sjpi`, `bw.SJ`) for **comparison**, but implements its own closed-form solution that matches them:
 
-"The Sheather-Jones method is more complicated and requires the Silverman bandwidth for a pilot bandwidth."
+| Method | Bandwidth |
+|--------|-----------|
+| Silverman | 3.299 |
+| `stats::bw.SJ` | 1.007 |
+| `MASS` | 4.029 |
+| `locfit::sjpi` | 1.673 |
+| Monte Carlo | 1.515 |
+| **Closed-form (own code)** | **1.673** |
 
-Results: `locfit::sjpi` = 1.672771, closed-form = 1.673207 (match to 4 digits).
+"It's somewhat surprising how similar the closed-form solution is to the {locfit} solution."
 
-The notebook validates the approach by comparing the **closed-form roughness** against the R package output.
+The closed-form R function (`sheather_jones_closed_form`) computes the roughness integral via the Gaussian product moment expansion — the same mathematical technique we use in $d$-D. The notebook's contribution is proving this works from raw code, not just from a package call.
 
 </td>
 <td>
@@ -500,8 +512,8 @@ The key mathematical object at each stage:
 |-------|-----------|---------------|------------|
 | Kernel | $K(z) = \phi(z)$ | Same | $K_h(\mathbf{t}) = (2\pi h^2)^{-d/2}e^{-\|\mathbf{t}\|^2/(2h^2)}$ |
 | 2nd derivative | $\phi''(z) = (z^2-1)\phi(z)$ | Derived explicitly (eq. 17) | $\nabla^2 K_h(\mathbf{t}) = h^{-2}K_h(\mathbf{t})(s - d)$, $s = \|\mathbf{t}\|^2/h^2$ |
-| Roughness kernel ($\Psi_4$) | $\phi^{(4)}(z) = (z^4-6z^2+3)\phi(z)$ | Derived as $L''L''$ product (eq. 20) | $e^{-t/4}\cdot P_d(t)$, $P_d = t^2/16 - (d{+}2)t/4 + d(d{+}2)/4$ |
-| Next-order kernel ($\Psi_6$) | $\phi^{(6)}(z) = (z^6-15z^4+45z^2-15)\phi(z)$ | Not derived (R package) | $e^{-t/4}\cdot R_d(t)$, $R_d = -t^3/64 + \ldots$ |
+| Roughness kernel ($\Psi_4$) | $\phi^{(4)}(z) = (z^4-6z^2+3)\phi(z)$ | Derived AND implemented as `sheather_jones_closed_form()` using Gaussian product moments | $e^{-t/4}\cdot P_d(t)$, $P_d = t^2/16 - (d{+}2)t/4 + d(d{+}2)/4$ |
+| Next-order kernel ($\Psi_6$) | $\phi^{(6)}(z) = (z^6-15z^4+45z^2-15)\phi(z)$ | Not derived (R package handles inner pilot) | $e^{-t/4}\cdot R_d(t)$, $R_d = -t^3/64 + \ldots$ |
 | Value at origin | $\phi^{(4)}(0) = 3\phi(0)$ | Implicit | $P_d(0) = d(d{+}2)/4$; $R_d(0) = d(d{+}2)(d{+}4)/8$ |
 
 ---
@@ -511,7 +523,7 @@ The key mathematical object at each stage:
 | Contribution | What was new | What it enabled |
 |-------------|-------------|-----------------|
 | **SJ (1991)** | Bias cancellation + "diagonals in" + STE | Reliable 1D bandwidth selection (R's `bw.SJ`) |
-| **Notebook** | Pedagogical closed-form derivation | Understanding of the "black box" — researchers can implement SJ from scratch |
+| **Notebook** | Pedagogical closed-form derivation + working R implementation | Understanding AND reproducing SJ from first principles — the Gaussian-product-moment technique that generalizes to $d$-D |
 | **Our d-D work** | $P_d$ and $R_d$ polynomials + full algorithm | Multivariate SJ for the first time — practical plug-in selection in $d > 1$ |
 
-The notebook was the bridge: by working through the 1D closed form by hand, it revealed the structure (pairwise evaluation → Gaussian product → polynomial × exponential) that generalizes naturally to $d$ dimensions.
+The notebook was the bridge: by working through the 1D closed form by hand AND implementing it as raw R code (the `sheather_jones_closed_form()` function using `outer()` + Gaussian product moments), it revealed the structure (pairwise evaluation → Gaussian product → midpoint moments → polynomial × exponential) that generalizes naturally to $d$ dimensions. The notebook's code literally computes moments 1–4 of the product Gaussian and assembles the pairwise polynomial — exactly what we do with SymPy/NumPy in $d$-D, just with $\|\mathbf{x}\|^2$ replacing $x^2$.
