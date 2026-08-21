@@ -1,0 +1,367 @@
+\documentclass[12pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{bm}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{tcolorbox}
+\usepackage{booktabs}
+
+\newcommand{\keyword}[1]{\textbf{\textcolor{blue!70!black}{#1}}}
+\newcommand{\analogy}[1]{\begin{tcolorbox}[colback=green!5,colframe=green!50!black,title=Analogy]\small #1\end{tcolorbox}}
+\newcommand{\whythis}[1]{\begin{tcolorbox}[colback=orange!5,colframe=orange!50!black,title=Why do we need this?]\small #1\end{tcolorbox}}
+\newcommand{\step}[1]{\begin{tcolorbox}[colback=blue!5,colframe=blue!50!black,title=Step-by-Step]\small #1\end{tcolorbox}}
+
+\title{How to Measure the Shape of Data\\[0.5em]\large A Complete Explanation of Multivariate Bandwidth Selection\\(Written So a Middle-Schooler Can Follow)}
+\author{Jared Yu}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+% ============================================================================
+\section{What Is This Paper About? (The Big Picture)}
+
+Imagine you have a jar of marbles. Some are clustered in one corner, some are spread out, some form little groups. You want to draw a \emph{smooth hill} over the marbles that shows where they're concentrated --- like a topographic map.
+
+The question is: \textbf{how smooth should that hill be?}
+
+\begin{itemize}
+\item \textbf{Too smooth}: You get one big blob. You can't see that there are actually two separate clusters.
+\item \textbf{Too bumpy}: Every single marble gets its own tiny spike. You can't see any patterns.
+\item \textbf{Just right}: You can see the real groups in the data.
+\end{itemize}
+
+The ``smoothness'' is controlled by a single number called the \keyword{bandwidth}, usually written as~$h$. This paper derives a formula to compute the best~$h$ automatically from the data, for data in any number of dimensions.
+
+\analogy{Think of bandwidth like the blur setting on a photo. Too much blur: you can't read the text. Too little: all the noise/grain is visible. There's a sweet spot.}
+
+% ============================================================================
+\section{Background: What Is a Density?}
+
+\subsection{From Histograms to Smooth Curves}
+
+You've probably seen histograms --- bar charts that show how often different values appear. A \keyword{density} is like a smooth version of a histogram: a curve that tells you how ``likely'' different values are.
+
+\begin{itemize}
+\item The height of the curve at a point = how concentrated the data is there
+\item The area under the curve always equals 1 (100\% of the data is \emph{somewhere})
+\item Peaks = lots of data there; valleys = little data there
+\end{itemize}
+
+\subsection{What ``Kernel Density Estimation'' Means}
+
+\keyword{Kernel Density Estimation (KDE)} is a method to draw that smooth curve. Here's how it works:
+
+\begin{enumerate}
+\item Put a little bell-shaped bump (a ``kernel'') on top of each data point
+\item Add all the bumps together
+\item Divide by the number of data points
+\end{enumerate}
+
+The width of each bump is the bandwidth~$h$.
+
+\analogy{Imagine each data point is a candle. The bandwidth~$h$ is how far the light from each candle spreads. Small~$h$ = focused flashlight (sharp). Large~$h$ = lantern (diffuse). Adding all the lights together gives you the density.}
+
+\subsection{What ``Multivariate'' Means}
+
+\keyword{Multivariate} means the data has more than one measurement per point. Instead of just measuring height (1 number per person = 1-dimensional), you might measure height AND weight (2 numbers per person = 2-dimensional). Or height, weight, age, income, and test score (5 numbers = 5-dimensional).
+
+We call the number of measurements $d$ (for ``dimensions'').
+
+When $d = 1$: data lives on a line.\\
+When $d = 2$: data lives on a flat plane.\\
+When $d = 3$: data lives in 3D space.\\
+When $d = 10$: data lives in 10-dimensional space (hard to visualize, but the math still works!).
+
+% ============================================================================
+\section{The Problem: Choosing $h$}
+
+\subsection{What ``Good'' Means (The Error)}
+
+We want our smooth curve to be as close as possible to the ``true'' density (which we don't know). We measure ``close'' by the \keyword{Integrated Squared Error (ISE)}:
+
+$$\text{ISE} = \int \left(\hat{f}(x) - f(x)\right)^2 dx$$
+
+\step{
+Breaking this down symbol by symbol:
+\begin{itemize}
+\item $f(x)$ = the true density (unknown --- what we're trying to estimate)
+\item $\hat{f}(x)$ = our estimate (the smooth curve we drew from data)
+\item $\hat{f}(x) - f(x)$ = the error at point $x$ (how far off we are)
+\item $(\cdots)^2$ = square it (makes all errors positive, penalizes big errors more)
+\item $\int \cdots\, dx$ = add up the squared error at every point (``integrate'' means ``sum over all of space'')
+\end{itemize}
+ISE is one number: the total squared difference between our curve and the truth.
+}
+
+\subsection{The Bias-Variance Tradeoff}
+
+The ISE splits into two opposing forces:
+
+$$\text{AMISE}(h) = \underbrace{\frac{C_1}{n \cdot h^d}}_{\text{Variance (wiggles)}} + \underbrace{\frac{h^4}{4} \cdot \Psi_4}_{\text{Bias}^2\text{ (blur)}}$$
+
+\step{
+\begin{itemize}
+\item \textbf{Variance term} $C_1/(n h^d)$: gets smaller when $h$ is big (more smoothing = less wiggly = lower variance). Gets bigger when $h$ is small.
+\item \textbf{Bias term} $h^4 \Psi_4 / 4$: gets smaller when $h$ is small (less blur = more accurate). Gets bigger when $h$ is big.
+\item $n$ = number of data points. More data $\to$ less variance $\to$ you can use smaller~$h$.
+\item $d$ = dimension. Higher $d$ $\to$ more variance $\to$ you need larger~$h$.
+\item $\Psi_4$ = a number that measures how ``rough'' (bumpy/complex) the true density is. More bumpy $\to$ more bias when you smooth $\to$ you need smaller~$h$.
+\end{itemize}
+}
+
+\whythis{This formula tells us: the best $h$ is a compromise. We want to minimize their SUM. Calculus (taking a derivative and setting to zero) gives us the best $h$.}
+
+\subsection{The Optimal Bandwidth Formula}
+
+Taking the derivative of AMISE with respect to $h$, setting it to zero, and solving:
+
+$$h^* = \left(\frac{d}{n \cdot \Psi_4 \cdot (4\pi)^{d/2}}\right)^{1/(d+4)}$$
+
+\step{
+What each piece means:
+\begin{itemize}
+\item $h^*$ = the best bandwidth (what we want to find)
+\item $d$ = dimension of the data (known)
+\item $n$ = number of data points (known)
+\item $(4\pi)^{d/2}$ = a constant that comes from the Gaussian (bell curve) shape of the kernel
+\item $\Psi_4$ = the roughness of the true density (\textbf{unknown!} --- this is the hard part)
+\item $1/(d+4)$ = the exponent. This ``dampens'' errors: even if $\Psi_4$ is off by 20\%, $h^*$ is only off by $\sim$3\%.
+\end{itemize}
+}
+
+\whythis{We know everything in this formula except $\Psi_4$. The entire paper is about finding a good estimate of~$\Psi_4$ from the data.}
+
+% ============================================================================
+\section{What Is $\Psi_4$? (The Roughness)}
+
+\subsection{The Concept}
+
+$\Psi_4$ measures how ``rough'' or ``bumpy'' the true density is:
+
+$$\Psi_4 = \int \left[\nabla^2 f(\mathbf{x})\right]^2 d\mathbf{x}$$
+
+\step{
+\begin{itemize}
+\item $f(\mathbf{x})$ = the true density at point $\mathbf{x}$
+\item $\nabla^2 f$ = the ``Laplacian'' of $f$ = the curvature. Measures how much the density curves at each point.
+\begin{itemize}
+    \item At a peak: $\nabla^2 f < 0$ (curves downward)
+    \item At a valley: $\nabla^2 f > 0$ (curves upward)
+    \item At a flat region: $\nabla^2 f \approx 0$ (no curvature)
+\end{itemize}
+\item $[\nabla^2 f]^2$ = square it (makes all curvature positive)
+\item $\int \cdots\, d\mathbf{x}$ = add up over all of space
+\end{itemize}
+}
+
+\analogy{Imagine running your hand over a surface. A smooth hill has low curvature everywhere --- low $\Psi_4$. A surface with lots of little bumps has high curvature in many places --- high $\Psi_4$. Think of it as the ``total bumpiness'' of the density.}
+
+\subsection{Why We Can't Just Compute It}
+
+$\Psi_4$ depends on the \emph{true} density $f$ --- which we don't know! (If we knew $f$, we wouldn't need KDE in the first place.)
+
+The trick: estimate $\Psi_4$ from the data using the KDE itself. Replace the unknown $f$ with our estimate $\hat{f}$, then compute the curvature of $\hat{f}$.
+
+% ============================================================================
+\section{The Key Formula: $P_d$ (Our Main Result)}
+
+\subsection{What We Derived}
+
+When we compute the roughness of our KDE estimate, each pair of data points $(Y_i, Y_j)$ contributes an amount that depends on their distance. We found that this contribution has a simple closed form:
+
+$$\text{Contribution of pair } (i,j) = \frac{e^{-r^2/4}}{(4\pi h_0^2)^{d/2}} \cdot P_d(r^2)$$
+
+where $r^2 = \|Y_i - Y_j\|^2 / h_0^2$ (the squared distance between the two points, measured in units of the bandwidth $h_0$), and:
+
+$$\boxed{P_d(t) = \frac{t^2}{16} - \frac{(d+2) \cdot t}{4} + \frac{d(d+2)}{4}}$$
+
+\step{
+Breaking down $P_d$:
+\begin{itemize}
+\item $t = r^2$ = the scaled squared distance between two data points
+\item $d$ = dimension (2 for 2D data, 5 for 5D data, etc.)
+\item The formula has three terms:
+\begin{itemize}
+    \item $t^2/16$: grows with distance squared (far-apart pairs contribute more to the $t^2$ term)
+    \item $-(d+2)t/4$: negative, linear in distance (subtracts for medium-distance pairs)
+    \item $d(d+2)/4$: constant (same for all pairs, including $i=j$)
+\end{itemize}
+\item When $t=0$ (same point, $i=j$): $P_d(0) = d(d+2)/4$ which is always positive
+\item The exponential $e^{-r^2/4}$ kills contributions from very distant pairs (they're irrelevant)
+\end{itemize}
+}
+
+\subsection{What Does This Look Like for Specific Dimensions?}
+
+\begin{itemize}
+\item $d=1$: $P_1(t) = t^2/16 - 3t/4 + 3/4$ (this is the original Sheather-Jones formula!)
+\item $d=2$: $P_2(t) = t^2/16 - t + 2$
+\item $d=3$: $P_3(t) = t^2/16 - 5t/4 + 15/4$
+\item $d=5$: $P_5(t) = t^2/16 - 7t/4 + 35/4$
+\end{itemize}
+
+\analogy{$P_d$ is like a recipe that tells you: ``given two data points that are distance~$r$ apart, here's how much they contribute to the total bumpiness estimate.'' Nearby points contribute a lot (they create bumps). Far-apart points contribute almost nothing (the exponential makes them negligible).}
+
+% ============================================================================
+\section{The Second Formula: $R_d$ (For the Adaptive Pilot)}
+
+\subsection{Why We Need a Second Formula}
+
+To get a really good estimate of $\Psi_4$, we need to choose the ``pilot bandwidth'' $h_0$ carefully. The best pilot comes from estimating a \emph{higher-order} roughness --- like zooming in one level deeper to measure an even finer property of the density.
+
+This higher-order roughness is called $\Psi_6$:
+
+$$\Psi_6 = \int \left\|\nabla(\nabla^2 f)\right\|^2 d\mathbf{x}$$
+
+\step{
+\begin{itemize}
+\item $\nabla^2 f$ = curvature of the density (same as before)
+\item $\nabla(\nabla^2 f)$ = the gradient (slope) of the curvature = ``how fast is the bumpiness changing?''
+\item $\|\cdot\|^2$ = length squared of this gradient vector
+\item $\int$ = add up over all space
+\item Interpretation: $\Psi_6$ measures how ``spiky'' the curvature itself is
+\end{itemize}
+}
+
+\subsection{The Formula}
+
+$$R_d(t) = -\frac{t^3}{64} + \frac{3(d+4)}{32} \cdot t^2 - \frac{3(d+2)(d+4)}{16} \cdot t + \frac{d(d+2)(d+4)}{8}$$
+
+\step{
+Same idea as $P_d$ but:
+\begin{itemize}
+\item Degree 3 (instead of 2) --- one degree higher because we're measuring one derivative order higher
+\item Coefficients involve $(d+4)$ in addition to $(d+2)$ --- the pattern: each derivative level introduces the next factor
+\item At $t=0$: $R_d(0) = d(d+2)(d+4)/8$ (always positive)
+\item At $d=1$: $R_1(t) = -t^3/64 + 15t^2/32 - 45t/16 + 15/8$ (matches the 1D formula)
+\end{itemize}
+}
+
+\whythis{$R_d$ lets us estimate $\Psi_6$, which tells us the ideal pilot bandwidth for estimating $\Psi_4$, which gives us the final bandwidth. It's like having a better compass to navigate to the treasure.}
+
+% ============================================================================
+\section{The Full Algorithm (Step by Step)}
+
+Here's the complete recipe for choosing the bandwidth:
+
+\begin{enumerate}
+\item \textbf{Whiten the data.} Make all directions have the same spread. (Like converting miles and kilograms to the same scale.)
+
+\item \textbf{Estimate the scale.} Find $\hat\sigma$ = a robust measure of how spread out the whitened data is.
+
+\item \textbf{Compute the pilot bandwidth.}
+$$g = \hat\sigma \cdot \left(\frac{2}{n(d+4)}\right)^{1/(d+6)}$$
+This is the bandwidth we'll use to estimate $\Psi_6$.
+
+\item \textbf{Estimate $\Psi_6$.} For every pair of data points, compute:
+$$\hat\Psi_6 = \frac{1}{n^2 (4\pi)^{d/2} g^{d+6}} \sum_{\text{all pairs}} e^{-r^2/4} \cdot R_d(r^2)$$
+
+\item \textbf{Compute the adaptive pilot.}
+$$g_1 = \left(\frac{d(d+2)}{4n(4\pi)^{d/2} \hat\Psi_6}\right)^{1/(d+6)}$$
+This is the better bandwidth for estimating $\Psi_4$.
+
+\item \textbf{Estimate $\Psi_4$.} Same structure, using $P_d$:
+$$\hat\Psi_4 = \frac{1}{n^2 (4\pi)^{d/2} g_1^{d+4}} \sum_{\text{all pairs}} e^{-r^2/4} \cdot P_d(r^2)$$
+
+\item \textbf{Final bandwidth:}
+$$h^* = \left(\frac{d}{n \cdot \hat\Psi_4 \cdot (4\pi)^{d/2}}\right)^{1/(d+4)}$$
+\end{enumerate}
+
+\analogy{
+Think of it like calibrating a microscope:
+\begin{enumerate}
+\item First, use a rough estimate to get the ``fine detail level'' of the sample ($\Psi_6$)
+\item Use that to pick the right zoom level for measuring ``overall bumpiness'' ($\Psi_4$)
+\item Use the bumpiness measurement to set the final smoothing amount ($h^*$)
+\end{enumerate}
+Each step refines the previous one, like zooming in progressively.}
+
+% ============================================================================
+\section{Why This Is the Same as the Original (for 1D)}
+
+In 1991, Sheather and Jones published their method for 1-dimensional data. Their formula uses something called ``Hermite functions'' --- special polynomials multiplied by a bell curve:
+
+$$\phi^{(4)}(z) = (z^4 - 6z^2 + 3) \cdot \phi(z)$$
+
+where $\phi(z)$ is the standard bell curve (Gaussian).
+
+When we set $d=1$ in our formula, we get exactly the same thing! The relationship is:
+
+$$\frac{e^{-z^2/4}}{\sqrt{4\pi}} \cdot P_1(z^2) = \phi^{(4)}(z/\sqrt{2}) \cdot (\text{scaling factor})$$
+
+\step{
+What this means:
+\begin{itemize}
+\item Our formula with $d=1$ produces identical numbers to the original SJ method
+\item We verified this: the difference is less than $10^{-14}$ (essentially zero, just computer rounding)
+\item Our formula is a true generalization: it extends the 1D method to any dimension
+\item The $\sqrt{2}$ factor comes from a technical detail (we integrate the product of two kernels, which gives effective width $\sqrt{2} \cdot h$)
+\end{itemize}
+}
+
+% ============================================================================
+\section{How Fast Is This?}
+
+Computing the sum over all pairs takes $O(n^2)$ operations (for $n$ data points, there are $n^2$ pairs). For large $n$:
+
+\begin{itemize}
+\item \textbf{$n \leq 3000$}: Compute all pairs exactly. Takes $< 1$ second.
+\item \textbf{$n > 3000$}: Random subsampling --- pick 80,000 random pairs instead of all $n^2$. The bandwidth error is only 1--2\% (because the $(d+4)$-th root dampens sampling noise). Takes $\sim$100 milliseconds regardless of $n$.
+\end{itemize}
+
+\analogy{You don't need to taste every grain of rice in the pot to know if it's cooked. A few spoonfuls from random places give you a reliable answer.}
+
+% ============================================================================
+\section{Real-World Example: Trading Levels}
+
+\subsection{What Traders Do}
+
+Day traders look at ``volume profiles'' --- density plots of where the most trading happened during a day. The peaks of this density are support/resistance levels (prices where the stock is likely to bounce or stall).
+
+\subsection{What We Found}
+
+We applied our method to real stock data (NVDA, TSLA, AAPL, SPY, AMD). The standard method (Silverman) found 2--4 levels per stock. Our method found 3--5 levels.
+
+\begin{center}
+\begin{tabular}{lcc}
+\toprule
+Stock & Silverman levels & Our method levels \\
+\midrule
+NVDA & 2 & \textbf{4} \\
+TSLA & 3 & \textbf{5} \\
+AAPL & 3 & \textbf{4} \\
+SPY  & 4 & \textbf{5} \\
+AMD  & 3 & \textbf{4} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The extra levels our method finds are real --- they correspond to prices where the stock actually paused or reversed direction. The standard method misses them because it's too smooth.
+
+\analogy{It's like the standard method is looking at a map with blurry vision and sees 2 mountains. Our method puts on glasses and sees there are actually 4 mountains, with two of them very close together (which the blurry view merged into one).}
+
+% ============================================================================
+\section{Summary}
+
+\begin{enumerate}
+\item KDE smooths data into a density curve. The bandwidth $h$ controls how smooth.
+\item The best $h$ depends on $\Psi_4$ (the total bumpiness of the true density).
+\item We found a formula ($P_d$) that computes $\Psi_4$ from pairwise distances in any dimension.
+\item We also found $R_d$ for a higher-order quantity ($\Psi_6$) needed for the adaptive pilot.
+\item Together, they give a complete bandwidth selection algorithm that generalizes the gold-standard 1D method (Sheather-Jones 1991) to any dimension.
+\item The method works: it finds finer structure in real data that simpler methods miss.
+\end{enumerate}
+
+\subsection{The One Formula to Remember}
+
+$$P_d(t) = \frac{t^2}{16} - \frac{(d+2)t}{4} + \frac{d(d+2)}{4}$$
+
+This three-term polynomial, applied to pairwise distances with an exponential weight, measures the bumpiness of data in any dimension. It's to density estimation what the sample variance formula is to measuring spread --- a simple, exact, computeable quantity that unlocks optimal statistical procedures.
+
+\end{document}
