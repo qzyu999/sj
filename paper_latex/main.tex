@@ -41,10 +41,10 @@
 
 % ============================================================================
 \begin{abstract}
-We generalize the Sheather--Jones (1991) bandwidth selection method to $d$~dimensions. The generalization rests on two closed-form polynomials---$P_d$ for estimating the Laplacian roughness~$\Psi_4$ and $R_d$ for the gradient-of-Laplacian roughness~$\Psi_6$---which enable a complete two-stage plug-in algorithm with an adaptive pilot bandwidth derived from bias cancellation, exactly mirroring the original one-dimensional construction. The method reduces to classical Sheather--Jones when $d=1$ and is implemented in the open-source Python package \texttt{gsj}. We demonstrate its practical value on intraday volume profile analysis, where the data-driven bandwidth consistently identifies 1--2~additional support/resistance levels compared to normal-reference rules.
+We generalize the Sheather--Jones (1991) bandwidth selection method to $d$~dimensions. The generalization rests on two closed-form polynomials---$P_d$ for estimating the Laplacian roughness~$\Psi_4$ and $R_d$ for the gradient-of-Laplacian roughness~$\Psi_6$---which enable a complete two-stage plug-in algorithm with an adaptive pilot bandwidth derived from bias cancellation, exactly mirroring the original one-dimensional construction. The method reduces to classical Sheather--Jones when $d=1$ and is implemented in the open-source Python package \texttt{gsj}. We demonstrate its value on financial market microstructure: (i)~intraday volume profiles, where the data-driven bandwidth identifies 1--2~additional support/resistance levels compared to normal-reference rules; and (ii)~2D options gamma exposure mapping, where it resolves distinct positioning clusters that Silverman's rule merges into a single zone.
 
 \medskip
-\noindent\textbf{Keywords:} bandwidth selection, kernel density estimation, plug-in method, multivariate, Sheather--Jones, volume profile
+\noindent\textbf{Keywords:} bandwidth selection, kernel density estimation, plug-in method, multivariate, Sheather--Jones, volume profile, gamma exposure, market microstructure
 \end{abstract}
 
 % ============================================================================
@@ -135,12 +135,14 @@ The exact computation is $O(n^2 d)$. For large~$n$:
 With subsampling, all algorithm variants (one-stage, two-stage, STE) cost ${\sim}\,100$--$200\,$ms regardless of~$n$.
 
 % ============================================================================
-\section{Application: Volume Profile Level Detection}
-\label{sec:volume_profile}
+\section{Applications}
+\label{sec:applications}
 
-A direct application where bandwidth choice has immediate practical consequences is \emph{volume profile analysis} in financial markets. Traders identify support/resistance levels as modes of the volume-weighted price density within a trading session. The bandwidth determines how many levels are resolved.
+We demonstrate two applications from financial market microstructure where bandwidth choice directly impacts actionable decisions.
 
-We computed rolling 60-bar volume-weighted KDEs on 1-minute data for five US equities (NVDA, TSLA, AAPL, SPY, AMD) over five trading days. At each rolling window, we detected density peaks (modes) using both Silverman's rule and our method.
+\subsection{Volume Profile: Intraday Support/Resistance Detection}
+
+Traders identify support/resistance levels as modes of the volume-weighted price density within a trading session. The bandwidth determines how many levels are resolved. We computed rolling 60-bar volume-weighted KDEs on 1-minute data for five US equities over five trading days.
 
 \begin{table}[t]
 \centering
@@ -159,7 +161,29 @@ AMD  & 2.967 & 1.170 & 3 & \textbf{4} \\
 \end{tabular}
 \end{table}
 
-Across all stocks, our method identifies 1--2 additional levels that visual inspection confirms correspond to genuine price consolidation zones. The data-driven bandwidth is 39--58\% of Silverman's---meaning Silverman oversmooths by a factor of~2 on this class of multimodal data.
+Across all stocks, our method identifies 1--2 additional levels corresponding to genuine price consolidation zones visible in the chart. The data-driven bandwidth is 39--58\% of Silverman's, consistent with oversmoothing by a factor of~2 on multimodal intraday data.
+
+\subsection{Options Gamma Exposure: 2D Position Clustering}
+
+A direct multivariate ($d{=}2$) application. Each options contract is a point in (moneyness\%, days-to-expiry) space, weighted by gamma~$\times$~open interest. The 2D KDE reveals where dealer gamma exposure concentrates---the ``gamma walls'' that create price magnetism.
+
+Using SPY options data (4,038 contracts, 269 strikes, DTE$\,{\leq}\,$90):
+\begin{itemize}
+  \item \textbf{Silverman} ($h = 0.271$): detects 2--3 broad zones (``near ATM'' and ``far OTM'')
+  \item \textbf{Our method} ($h = 0.109$): detects \textbf{4--5 distinct zones}---resolving the near-term gamma pin (weekly expiry), monthly put wall, and individual call resistance levels
+\end{itemize}
+
+The 1D gamma profile comparison is more striking: Silverman bandwidth \$23.52 (treats everything within $\pm$\$24 as one zone) versus our \$2.85 (resolves individual strike-level gamma concentrations). For a trader, the difference between ``gamma concentrated somewhere near \$760'' and ``gamma walls at \$764 and \$783'' is the difference between a vague thesis and an actionable trade.
+
+\subsection{Why Financial Data Favors Data-Driven Bandwidth}
+
+Market microstructure data is almost never unimodal:
+\begin{itemize}
+  \item Volume clusters at support/resistance levels (price), at round numbers, at previous highs/lows
+  \item Options positioning clusters at round strikes (\$50 and \$100 increments), popular expiries (monthly, quarterly), and strategic levels (current support/resistance turned into options walls)
+  \item Order flow clusters by participant type (institutional sweeps, retail odd-lots, HFT)
+\end{itemize}
+Silverman's normal-reference assumption is maximally wrong in this setting---the data has 3--10 genuine modes, and oversmoothing merges them into one or two blobs.
 
 % ============================================================================
 \section{Simulation Study}

@@ -318,13 +318,11 @@ Computing the sum over all pairs takes $O(n^2)$ operations (for $n$ data points,
 \analogy{You don't need to taste every grain of rice in the pot to know if it's cooked. A few spoonfuls from random places give you a reliable answer.}
 
 % ============================================================================
-\section{Real-World Example: Trading Levels}
+\section{Real-World Example: Trading Applications}
 
-\subsection{What Traders Do}
+\subsection{Volume Profile (1D)}
 
 Day traders look at ``volume profiles'' --- density plots of where the most trading happened during a day. The peaks of this density are support/resistance levels (prices where the stock is likely to bounce or stall).
-
-\subsection{What We Found}
 
 We applied our method to real stock data (NVDA, TSLA, AAPL, SPY, AMD). The standard method (Silverman) found 2--4 levels per stock. Our method found 3--5 levels.
 
@@ -345,6 +343,61 @@ AMD  & 3 & \textbf{4} \\
 The extra levels our method finds are real --- they correspond to prices where the stock actually paused or reversed direction. The standard method misses them because it's too smooth.
 
 \analogy{It's like the standard method is looking at a map with blurry vision and sees 2 mountains. Our method puts on glasses and sees there are actually 4 mountains, with two of them very close together (which the blurry view merged into one).}
+
+\subsection{Options Gamma Exposure (2D --- True Multivariate!)}
+
+This is where our $d$-dimensional generalization actually comes into play (not just 1D).
+
+\whythis{When you buy an option, a market maker (``dealer'') takes the other side. The dealer now has ``gamma exposure'' --- they must constantly buy and sell shares as the stock price moves, to stay hedged. WHERE this gamma concentrates in (strike price, days-to-expiry) space tells you where the stock price will get ``stuck'' (pinned) or ``accelerate'' (break out).}
+
+Each options contract is a point in 2D space:
+\begin{itemize}
+\item \textbf{X-axis}: How far the strike is from the current stock price (``moneyness'')
+\item \textbf{Y-axis}: How many days until the option expires (DTE)
+\end{itemize}
+
+We weight each point by how much gamma exposure it creates, then fit a 2D KDE. The peaks of this 2D density show the ``crowded'' positions --- where dealers have the most hedging to do.
+
+\textbf{Results on SPY options (4,038 contracts):}
+\begin{itemize}
+\item Silverman finds \textbf{2--3 broad zones} (basically just ``near the current price'' and ``far away'')
+\item Our method finds \textbf{4--5 distinct zones} --- resolving the weekly expiry pin, the monthly put wall, and individual call resistance levels
+\end{itemize}
+
+In the 1D gamma profile: Silverman's bandwidth is \$23.52 (everything within $\pm$\$24 is one zone). Our bandwidth is \$2.85 (can distinguish gamma walls that are only \$5 apart).
+
+\analogy{For a trader, Silverman is like a weather forecast that says ``it might rain somewhere in the city this week.'' Our method says ``it will rain on Main Street between 2-4pm on Tuesday.'' The second one is actionable.}
+
+\subsection{Why Financial Data Is Perfect for Our Method}
+
+Market data is almost \textbf{never} normally distributed:
+\begin{itemize}
+\item Volume clusters at specific price levels (support/resistance)
+\item Options cluster at round strike prices (\$50 and \$100 increments)
+\item Different types of traders (big institutions, retail, algorithms) create distinct clusters
+\end{itemize}
+
+Silverman's method \textit{assumes} the data is bell-shaped. It always oversmooths, merging real structure into blobs. Our method adapts to what's actually there.
+
+\subsection{Other Trading Applications (Same Math, Different Data)}
+
+The same technique applies to many other financial problems:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Application & Dimensions & What peaks tell you \\
+\midrule
+Volume profile & 1D & Support/resistance price levels \\
+Options gamma map & 2D & Where dealer hedging concentrates \\
+Order flow regimes & 4D & Different trading participant types \\
+Implied vol surface & 2D & Where vol is cheap vs expensive \\
+Cross-asset regimes & 5--10D & Market regime identification \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+In every case, the bandwidth choice determines whether you see the real structure or a blurry approximation of it.
 
 % ============================================================================
 \section{Summary}
