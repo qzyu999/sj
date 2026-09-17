@@ -492,8 +492,6 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
 {
     SCSubgraphRef Sub_BW = sc.Subgraph[10];
     SCSubgraphRef Sub_POC = sc.Subgraph[11];
-    SCSubgraphRef Sub_VAH = sc.Subgraph[12];
-    SCSubgraphRef Sub_VAL = sc.Subgraph[13];
 
     SCInputRef In_Scope        = sc.Input[0];
     SCInputRef In_NumBars      = sc.Input[1];
@@ -527,7 +525,6 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     SCInputRef In_DynLevels    = sc.Input[29];
     SCInputRef In_DrawStatic   = sc.Input[30];
     SCInputRef In_ShowPrior    = sc.Input[31];
-    SCInputRef In_ValueAreaPct = sc.Input[32];
 
     int& r_LastDrawn = sc.GetPersistentInt(1);
     SCDateTime& r_LastTime = sc.GetPersistentSCDateTime(2);
@@ -559,12 +556,6 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
 
         Sub_POC.Name = "POC"; Sub_POC.DrawStyle = DRAWSTYLE_LINE_SKIP_ZEROS;
         Sub_POC.PrimaryColor = RGB(255,215,0); Sub_POC.LineWidth = 3; Sub_POC.DrawZeros = false;
-
-        Sub_VAH.Name = "VA High"; Sub_VAH.DrawStyle = DRAWSTYLE_LINE_SKIP_ZEROS;
-        Sub_VAH.PrimaryColor = RGB(100,149,237); Sub_VAH.LineWidth = 2; Sub_VAH.DrawZeros = false;
-
-        Sub_VAL.Name = "VA Low"; Sub_VAL.DrawStyle = DRAWSTYLE_LINE_SKIP_ZEROS;
-        Sub_VAL.PrimaryColor = RGB(100,149,237); Sub_VAL.LineWidth = 2; Sub_VAL.DrawZeros = false;
 
         In_Scope.Name = "Profile Scope";
         In_Scope.SetCustomInputStrings("Current Session;Bars Back;Entire Chart;Prior Session");
@@ -599,8 +590,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         In_DynHistory.Name = "Dynamic History (bars)"; In_DynHistory.SetInt(500); In_DynHistory.SetIntLimits(20,10000);
         In_DynLevels.Name = "Dynamic Levels (1-5)"; In_DynLevels.SetInt(3); In_DynLevels.SetIntLimits(1,5);
         In_DrawStatic.Name = "Draw Static Levels"; In_DrawStatic.SetYesNo(1);
-        In_ShowPrior.Name = "Show Prior Session POC/VA"; In_ShowPrior.SetYesNo(1);
-        In_ValueAreaPct.Name = "Value Area %"; In_ValueAreaPct.SetInt(70); In_ValueAreaPct.SetIntLimits(50,95);
+        In_ShowPrior.Name = "Show Prior Session POC"; In_ShowPrior.SetYesNo(1);
         return;
     }
 
@@ -650,7 +640,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
             for (int i = 0; i < calcStart; ++i)
             {
                 for (int t = 0; t < 5; ++t) { sc.Subgraph[t][i]=0; sc.Subgraph[5+t][i]=0; }
-                Sub_BW[i]=0; Sub_POC[i]=0; Sub_VAH[i]=0; Sub_VAL[i]=0;
+                Sub_BW[i]=0; Sub_POC[i]=0;
             }
         }
         else calcStart = sjMax(0, sc.UpdateStartIndex);
@@ -701,10 +691,8 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
                     s_KDEResult kde = EvaluateKDE(sj.Prices, sj.Weights, bw,
                                                   static_cast<double>(sc.TickSize), 3.0f);
                     Sub_POC[bar] = kde.POC;
-                    Sub_VAH[bar] = kde.VAHigh;
-                    Sub_VAL[bar] = kde.VALow;
                 }
-                else { Sub_POC[bar]=0; Sub_VAH[bar]=0; Sub_VAL[bar]=0; }
+                else { Sub_POC[bar]=0; }
             }
 
             // Save for next bar's continuity
@@ -716,7 +704,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         for (int i = 0; i < sc.ArraySize; ++i)
         {
             for (int t = 0; t < 5; ++t) { sc.Subgraph[t][i]=0; sc.Subgraph[5+t][i]=0; }
-            Sub_BW[i]=0; Sub_POC[i]=0; Sub_VAH[i]=0; Sub_VAL[i]=0;
+            Sub_BW[i]=0; Sub_POC[i]=0;
         }
     }
 
@@ -758,9 +746,9 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     const int nL = sjMin(In_MaxLVN.GetInt(), static_cast<int>(kde.LVNs.size()));
 
     SCString diag;
-    diag.Format("SJ: N=%.0f M=%d h=%.4f POC=%.2f VA=[%.2f,%.2f] HVNs=%d LVNs=%d",
+    diag.Format("SJ: N=%.0f M=%d h=%.4f POC=%.2f HVNs=%d LVNs=%d",
                 sj.N, static_cast<int>(sj.Prices.size()), hFinal,
-                kde.POC, kde.VALow, kde.VAHigh, nH, nL);
+                kde.POC, nH, nL);
     sc.AddMessageToLog(diag, 0);
 
     // =================================================================
@@ -903,32 +891,8 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
             T.DisplayHorizontalLineValue=0; T.Text.Format("POC %.2f", kde.POC); }
         T.AddMethod=UTAM_ADD_OR_ADJUST; sc.UseTool(T);
     }
-    // VA High
-    if (li < MaxDrawn)
-    {
-        s_UseTool T; T.Clear(); T.ChartNumber=sc.ChartNumber; T.DrawingType=dType;
-        T.LineNumber=BaseLn+li++; T.BeginValue=kde.VAHigh; T.EndValue=kde.VAHigh;
-        T.BeginDateTime=sc.BaseDateTimeIn[sBar]; T.EndDateTime=sc.BaseDateTimeIn[eBar];
-        T.Color=RGB(100,149,237); T.LineWidth=2; T.LineStyle=LINESTYLE_DASH;
-        if (lPos!=2) { T.TransparentLabelBackground=1; T.FontSize=lFnt;
-            T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_BOTTOM):(DT_LEFT|DT_BOTTOM);
-            T.DisplayHorizontalLineValue=0; T.Text.Format("VAH %.2f", kde.VAHigh); }
-        T.AddMethod=UTAM_ADD_OR_ADJUST; sc.UseTool(T);
-    }
-    // VA Low
-    if (li < MaxDrawn)
-    {
-        s_UseTool T; T.Clear(); T.ChartNumber=sc.ChartNumber; T.DrawingType=dType;
-        T.LineNumber=BaseLn+li++; T.BeginValue=kde.VALow; T.EndValue=kde.VALow;
-        T.BeginDateTime=sc.BaseDateTimeIn[sBar]; T.EndDateTime=sc.BaseDateTimeIn[eBar];
-        T.Color=RGB(100,149,237); T.LineWidth=2; T.LineStyle=LINESTYLE_DASH;
-        if (lPos!=2) { T.TransparentLabelBackground=1; T.FontSize=lFnt;
-            T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_BOTTOM):(DT_LEFT|DT_BOTTOM);
-            T.DisplayHorizontalLineValue=0; T.Text.Format("VAL %.2f", kde.VALow); }
-        T.AddMethod=UTAM_ADD_OR_ADJUST; sc.UseTool(T);
-    }
 
-    // --- Prior session POC/VA overlay ---
+    // --- Prior session POC overlay ---
     if (In_ShowPrior.GetYesNo() && In_Scope.GetIndex() == 0 && !isMacro)
     {
         int pS, pE;
@@ -944,7 +908,6 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
                                              static_cast<double>(sc.TickSize), In_MinProm.GetFloat());
                 if (pk.MaxDensity > 0.0f)
                 {
-                    COLORREF priorCol = RGB(180,180,180);
                     // Prior POC
                     if (li < MaxDrawn) {
                         s_UseTool T; T.Clear(); T.ChartNumber=sc.ChartNumber; T.DrawingType=dType;
@@ -954,28 +917,6 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
                         if (lPos!=2) { T.TransparentLabelBackground=1; T.FontSize=lFnt-1;
                             T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_BOTTOM):(DT_LEFT|DT_BOTTOM);
                             T.DisplayHorizontalLineValue=0; T.Text.Format("pPOC %.2f", pk.POC); }
-                        T.AddMethod=UTAM_ADD_OR_ADJUST; sc.UseTool(T);
-                    }
-                    // Prior VAH
-                    if (li < MaxDrawn) {
-                        s_UseTool T; T.Clear(); T.ChartNumber=sc.ChartNumber; T.DrawingType=dType;
-                        T.LineNumber=BaseLn+li++; T.BeginValue=pk.VAHigh; T.EndValue=pk.VAHigh;
-                        T.BeginDateTime=sc.BaseDateTimeIn[sBar]; T.EndDateTime=sc.BaseDateTimeIn[eBar];
-                        T.Color=priorCol; T.TransparencyLevel=50; T.LineWidth=1; T.LineStyle=LINESTYLE_DOT;
-                        if (lPos!=2) { T.TransparentLabelBackground=1; T.FontSize=lFnt-1;
-                            T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_BOTTOM):(DT_LEFT|DT_BOTTOM);
-                            T.DisplayHorizontalLineValue=0; T.Text.Format("pVAH %.2f", pk.VAHigh); }
-                        T.AddMethod=UTAM_ADD_OR_ADJUST; sc.UseTool(T);
-                    }
-                    // Prior VAL
-                    if (li < MaxDrawn) {
-                        s_UseTool T; T.Clear(); T.ChartNumber=sc.ChartNumber; T.DrawingType=dType;
-                        T.LineNumber=BaseLn+li++; T.BeginValue=pk.VALow; T.EndValue=pk.VALow;
-                        T.BeginDateTime=sc.BaseDateTimeIn[sBar]; T.EndDateTime=sc.BaseDateTimeIn[eBar];
-                        T.Color=priorCol; T.TransparencyLevel=50; T.LineWidth=1; T.LineStyle=LINESTYLE_DOT;
-                        if (lPos!=2) { T.TransparentLabelBackground=1; T.FontSize=lFnt-1;
-                            T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_BOTTOM):(DT_LEFT|DT_BOTTOM);
-                            T.DisplayHorizontalLineValue=0; T.Text.Format("pVAL %.2f", pk.VALow); }
                         T.AddMethod=UTAM_ADD_OR_ADJUST; sc.UseTool(T);
                     }
                 }
