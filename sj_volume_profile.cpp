@@ -899,7 +899,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         T.BeginDateTime=lineRightDT; T.EndDateTime=kdeBaseDT;
         T.Color=RGB(255,215,0); T.LineWidth=3; T.LineStyle=LINESTYLE_SOLID;
         if (lPos!=2) { T.TransparentLabelBackground=1; T.FontSize=lFnt;
-            T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_BOTTOM):(DT_LEFT|DT_BOTTOM);
+            T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_TOP):(DT_LEFT|DT_TOP);
             T.DisplayHorizontalLineValue=0; T.Text.Format("POC %.2f", kde.POC); }
         T.AddMethod=UTAM_ADD_OR_ADJUST; sc.UseTool(T);
     }
@@ -927,7 +927,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
                         T.BeginDateTime=lineRightDT; T.EndDateTime=kdeBaseDT;
                         T.Color=RGB(200,180,60); T.TransparencyLevel=40; T.LineWidth=2; T.LineStyle=LINESTYLE_DOT;
                         if (lPos!=2) { T.TransparentLabelBackground=1; T.FontSize=lFnt-1;
-                            T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_BOTTOM):(DT_LEFT|DT_BOTTOM);
+                            T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_TOP):(DT_LEFT|DT_TOP);
                             T.DisplayHorizontalLineValue=0; T.Text.Format("pPOC %.2f", pk.POC); }
                         T.AddMethod=UTAM_ADD_OR_ADJUST; sc.UseTool(T);
                     }
