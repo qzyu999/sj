@@ -788,7 +788,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     }
 
     // Right edge for static lines: extend far into forward space to reach chart edge
-    SCDateTime lineRightDT = OD(lastBarDT, mOff + eW + 500);
+    SCDateTime lineRightDT = OD(lastBarDT, mOff + eW + 1000);
 
     auto KC = [&](float ratio, const SCDateTime& last, SCDateTime& bDT, SCDateTime& tDT)
     {
