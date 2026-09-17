@@ -787,6 +787,9 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         else              kdeBaseDT = lastBarDT;
     }
 
+    // Right edge for static lines: extend well past the KDE profile into forward space
+    SCDateTime lineRightDT = OD(lastBarDT, mOff + eW + 20);
+
     auto KC = [&](float ratio, const SCDateTime& last, SCDateTime& bDT, SCDateTime& tDT)
     {
         int pl = sjClampI(In_KDEPlace.GetIndex(), 0, 2);
@@ -893,7 +896,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     {
         s_UseTool T; T.Clear(); T.ChartNumber=sc.ChartNumber; T.DrawingType=DRAWING_LINE;
         T.LineNumber=BaseLn+li++; T.BeginValue=kde.POC; T.EndValue=kde.POC;
-        T.BeginDateTime=kdeBaseDT; T.EndDateTime=sc.BaseDateTimeIn[eBar];
+        T.BeginDateTime=lineRightDT; T.EndDateTime=kdeBaseDT;
         T.Color=RGB(255,215,0); T.LineWidth=3; T.LineStyle=LINESTYLE_SOLID;
         if (lPos!=2) { T.TransparentLabelBackground=1; T.FontSize=lFnt;
             T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_BOTTOM):(DT_LEFT|DT_BOTTOM);
@@ -921,7 +924,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
                     if (li < MaxDrawn) {
                         s_UseTool T; T.Clear(); T.ChartNumber=sc.ChartNumber; T.DrawingType=DRAWING_LINE;
                         T.LineNumber=BaseLn+li++; T.BeginValue=pk.POC; T.EndValue=pk.POC;
-                        T.BeginDateTime=kdeBaseDT; T.EndDateTime=sc.BaseDateTimeIn[eBar];
+                        T.BeginDateTime=lineRightDT; T.EndDateTime=kdeBaseDT;
                         T.Color=RGB(200,180,60); T.TransparencyLevel=40; T.LineWidth=2; T.LineStyle=LINESTYLE_DOT;
                         if (lPos!=2) { T.TransparentLabelBackground=1; T.FontSize=lFnt-1;
                             T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_BOTTOM):(DT_LEFT|DT_BOTTOM);
@@ -939,7 +942,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         const s_Level& h = kde.HVNs[i];
         s_UseTool T; T.Clear(); T.ChartNumber=sc.ChartNumber; T.DrawingType=DRAWING_LINE;
         T.LineNumber=BaseLn+li; T.BeginValue=h.Price; T.EndValue=h.Price;
-        T.BeginDateTime=kdeBaseDT; T.EndDateTime=sc.BaseDateTimeIn[eBar];
+        T.BeginDateTime=lineRightDT; T.EndDateTime=kdeBaseDT;
         T.Color=GradientColor(In_HVNColor.GetColor(), h.Prominence, gM);
         if (uT) T.TransparencyLevel=sjClamp(static_cast<int>((1.0f-h.Prominence)*65.0f), 0, 80);
         int w = In_LineWidth.GetInt();
@@ -958,7 +961,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         const s_Level& l = kde.LVNs[i];
         s_UseTool T; T.Clear(); T.ChartNumber=sc.ChartNumber; T.DrawingType=DRAWING_LINE;
         T.LineNumber=BaseLn+li; T.BeginValue=l.Price; T.EndValue=l.Price;
-        T.BeginDateTime=kdeBaseDT; T.EndDateTime=sc.BaseDateTimeIn[eBar];
+        T.BeginDateTime=lineRightDT; T.EndDateTime=kdeBaseDT;
         T.Color=GradientColor(In_LVNColor.GetColor(), l.Prominence, gM);
         if (uT) T.TransparencyLevel=sjClamp(static_cast<int>((1.0f-l.Prominence)*65.0f), 0, 80);
         int w = sjMax(1, In_LineWidth.GetInt()-1);
