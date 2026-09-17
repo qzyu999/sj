@@ -3,454 +3,627 @@
 #include <map>
 #include <cmath>
 #include <algorithm>
-#include <type_traits>
-#include <iterator>
 
 SCDLLName("Sheather-Jones Volume Profile")
 
 static const double SJ_PI = 3.14159265358979323846;
 
-/*==========================================================================*/
-// Safe min/max/clamp helpers immune to Windows/SierraChart min/max macros and mixed types
-template<typename T1, typename T2>
-static inline auto SJ_Min(T1 a, T2 b) -> typename std::common_type<T1, T2>::type
+// Safe min/max/clamp — immune to Windows min/max macros
+template<typename T> static inline T sjMin(T a, T b) { return (a < b) ? a : b; }
+template<typename T> static inline T sjMax(T a, T b) { return (a > b) ? a : b; }
+template<typename T> static inline T sjClamp(T v, T lo, T hi) { return (v < lo) ? lo : ((v > hi) ? hi : v); }
+
+// =========================================================================
+// 1. HISTOGRAM COLLECTION — chart-type-agnostic
+//    Reads VP API for a bar range, returns price→volume map.
+// =========================================================================
+
+struct s_Histogram
 {
-    return (a < b) ? a : b;
+    std::map<int, double> TickVolume; // PriceInTicks → total volume
+    double TotalVolume;
+};
+
+static s_Histogram CollectHistogram(SCStudyInterfaceRef sc, int startBar, int endBar)
+{
+    s_Histogram hist;
+    hist.TotalVolume = 0.0;
+
+    if (sc.VolumeAtPriceForBars == nullptr)
+        return hist;
+
+    for (int b = startBar; b <= endBar; ++b)
+    {
+        const int n = sc.VolumeAtPriceForBars->GetSizeAtBarIndex(b);
+        for (int v = 0; v < n; ++v)
+        {
+            const s_VolumeAtPriceV2* p = nullptr;
+            if (!sc.VolumeAtPriceForBars->GetVAPElementAtIndex(b, v, &p) || p == nullptr)
+                break;
+            if (p->Volume > 0)
+            {
+                hist.TickVolume[p->PriceInTicks] += static_cast<double>(p->Volume);
+                hist.TotalVolume += static_cast<double>(p->Volume);
+            }
+        }
+    }
+    return hist;
 }
 
-template<typename T1, typename T2>
-static inline auto SJ_Max(T1 a, T2 b) -> typename std::common_type<T1, T2>::type
+// =========================================================================
+// 2. SHEATHER-JONES BANDWIDTH — pure math, no chart concepts
+//
+//    Input:  sorted prices[], weights[] (= volume_i / totalVolume), N = totalVolume
+//    Output: optimal bandwidth h
+//
+//    This is the standard 1D SJ Direct Plug-In:
+//      (a) Silverman pilot h_0  = (4/(3N))^(1/5) * scale
+//      (b) Roughness estimate   S = sum_{i,j} w_i w_j exp(-r^2/4) P(r^2)
+//                                   / (sqrt(4*pi) * h_0^5)
+//      (c) Optimal bandwidth    h = (R(K) / (N * S))^(1/5)
+//
+//    where R(K) = 1/(2*sqrt(pi)), P(t) = t^2/16 - 3t/4 + 3/4
+// =========================================================================
+
+struct s_SJResult
 {
-    return (a > b) ? a : b;
+    double Bandwidth;
+    std::vector<double> Prices;  // sorted, in price units
+    std::vector<double> Weights; // normalized by total volume
+    double N;                    // total volume (= effective sample size)
+};
+
+static s_SJResult ComputeSJBandwidth(const s_Histogram& hist, double tickSize)
+{
+    s_SJResult result;
+    result.Bandwidth = tickSize; // fallback
+
+    const int M = static_cast<int>(hist.TickVolume.size());
+    if (M < 3 || hist.TotalVolume <= 0.0)
+        return result;
+
+    result.N = hist.TotalVolume;
+    result.Prices.resize(M);
+    result.Weights.resize(M);
+
+    // Build sorted price/weight arrays from the histogram
+    double weightedMean = 0.0;
+    int idx = 0;
+    for (auto it = hist.TickVolume.begin(); it != hist.TickVolume.end(); ++it, ++idx)
+    {
+        result.Prices[idx]  = it->first * tickSize;
+        result.Weights[idx] = it->second / hist.TotalVolume;
+        weightedMean += result.Weights[idx] * result.Prices[idx];
+    }
+
+    // Weighted variance
+    double weightedVar = 0.0;
+    for (int i = 0; i < M; ++i)
+    {
+        double d = result.Prices[i] - weightedMean;
+        weightedVar += result.Weights[i] * d * d;
+    }
+    double sigma = sqrt(sjMax(weightedVar, 1e-12));
+
+    // Weighted IQR for robust scale
+    double cumW = 0.0, Q25 = result.Prices.front(), Q75 = result.Prices.back();
+    bool foundQ25 = false;
+    for (int i = 0; i < M; ++i)
+    {
+        cumW += result.Weights[i];
+        if (!foundQ25 && cumW >= 0.25) { Q25 = result.Prices[i]; foundQ25 = true; }
+        if (cumW >= 0.75)              { Q75 = result.Prices[i]; break; }
+    }
+    double iqr = Q75 - Q25;
+    double scale = (iqr > 0.0) ? sjMin(sigma, iqr / 1.349) : sigma;
+    if (scale <= 0.0) scale = sigma;
+
+    // (a) Silverman pilot
+    double h0 = pow(4.0 / (3.0 * result.N), 0.2) * scale;
+    h0 = sjMax(h0, tickSize);
+
+    // (b) Roughness: S = sum_{i,j} w_i w_j exp(-r^2/4) P_1(r^2)
+    //     P_1(t) = t^2/16 - 3t/4 + 3/4    (the d=1 polynomial)
+    //     Diagonal (i=j): r=0, exp(0)=1, P(0)=3/4
+    //     Off-diagonal: exploit sorted prices for early exit
+    double S = 0.0;
+    const double h0sq = h0 * h0;
+
+    for (int i = 0; i < M; ++i)
+    {
+        // Diagonal contribution
+        S += result.Weights[i] * result.Weights[i] * 0.75;
+
+        // Off-diagonal (j > i only, multiply by 2)
+        for (int j = i + 1; j < M; ++j)
+        {
+            double diff = result.Prices[j] - result.Prices[i];
+            double rsq = (diff * diff) / h0sq;
+            if (rsq > 36.0) break; // sorted, so all further j are farther
+
+            double P = (rsq * rsq) / 16.0 - (3.0 * rsq) / 4.0 + 0.75;
+            double W = exp(-rsq / 4.0);
+            S += 2.0 * result.Weights[i] * result.Weights[j] * W * P;
+        }
+    }
+
+    double roughness = S / (sqrt(4.0 * SJ_PI) * pow(h0, 5.0));
+
+    // (c) Optimal bandwidth
+    const double RK = 1.0 / (2.0 * sqrt(SJ_PI));
+    if (roughness > 1e-15)
+        result.Bandwidth = pow(RK / (result.N * roughness), 0.2);
+    else
+        result.Bandwidth = h0;
+
+    result.Bandwidth = sjMax(result.Bandwidth, tickSize);
+    return result;
 }
 
-template<typename T, typename LowT, typename HighT>
-static inline T SJ_Clamp(T val, LowT low, HighT high)
-{
-    T l = static_cast<T>(low);
-    T h = static_cast<T>(high);
-    return (val < l) ? l : ((val > h) ? h : val);
-}
+// =========================================================================
+// 3. KDE EVALUATION + PEAK/VALLEY DETECTION — pure math
+// =========================================================================
 
-/*==========================================================================*/
-// Structure to store detected levels (HVNs and LVNs)
-struct s_SJLevel
+struct s_Level
 {
     float Price;
     float Density;
-    float Prominence; // Normalized 0.0 to 1.0
-    bool IsHVN;       // true = HVN (peak), false = LVN (valley)
+    float Prominence;
+    bool  IsHVN; // true = peak, false = valley
 };
 
-/*==========================================================================*/
-// Helper function to calculate prominence-based color gradient
-static uint32_t CalculateGradientColor(COLORREF BaseColor, float Prominence, int GradientMode)
+struct s_KDEResult
 {
-    // GradientMode: 0 = Darker for Strongest, Lighter for Weakest
-    //               1 = Brighter for Strongest, Dimmer for Weakest
-    //               2 = Solid Base Color
-    if (GradientMode == 2)
-        return BaseColor;
-
-    uint8_t r = BaseColor & 0xFF;
-    uint8_t g = (BaseColor >> 8) & 0xFF;
-    uint8_t b = (BaseColor >> 16) & 0xFF;
-
-    float t = SJ_Clamp(Prominence, 0.0f, 1.0f);
-
-    if (GradientMode == 0) // Darker & richer for Strongest, Lighter & softer for Weakest
-    {
-        float dark_scale = 0.70f + 0.30f * (1.0f - t); // 0.70 when t=1, 1.00 when t=0
-        float light_blend = (1.0f - t) * 0.60f;         // 0.0 when t=1, 0.60 when t=0
-
-        float new_r = (r * dark_scale) * (1.0f - light_blend) + 245.0f * light_blend;
-        float new_g = (g * dark_scale) * (1.0f - light_blend) + 245.0f * light_blend;
-        float new_b = (b * dark_scale) * (1.0f - light_blend) + 245.0f * light_blend;
-
-        uint8_t final_r = static_cast<uint8_t>(SJ_Clamp(new_r, 0.0f, 255.0f));
-        uint8_t final_g = static_cast<uint8_t>(SJ_Clamp(new_g, 0.0f, 255.0f));
-        uint8_t final_b = static_cast<uint8_t>(SJ_Clamp(new_b, 0.0f, 255.0f));
-
-        return RGB(final_r, final_g, final_b);
-    }
-    else // Brighter for Strongest, Dimmer for Weakest
-    {
-        float factor = 0.35f + 0.65f * t;
-        uint8_t final_r = static_cast<uint8_t>(SJ_Clamp(r * factor, 0.0f, 255.0f));
-        uint8_t final_g = static_cast<uint8_t>(SJ_Clamp(g * factor, 0.0f, 255.0f));
-        uint8_t final_b = static_cast<uint8_t>(SJ_Clamp(b * factor, 0.0f, 255.0f));
-        return RGB(final_r, final_g, final_b);
-    }
-}
-
-// -------------------------------------------------------------------------
-// Structure and helper for Dynamic Rolling / Developing Sheather-Jones KDE
-// -------------------------------------------------------------------------
-const int MAX_DYNAMIC_TRACKS = 5;
-
-struct s_DynamicKDEOutput
-{
-    float HVN[MAX_DYNAMIC_TRACKS] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    float LVN[MAX_DYNAMIC_TRACKS] = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    float Bandwidth = 0.0f;
+    std::vector<float> GridPrices;
+    std::vector<float> GridDensity;
+    float MaxDensity;
+    std::vector<s_Level> HVNs; // sorted by prominence descending
+    std::vector<s_Level> LVNs; // sorted by prominence descending
 };
 
-static s_DynamicKDEOutput ComputeDynamicKDE(
-    SCStudyInterfaceRef sc,
-    int sIdx,
-    int eIdx,
-    float BandwidthMultiplier,
-    int MaxTracks,
-    std::vector<double>& PricesBuf,
-    std::vector<double>& WeightsBuf,
-    std::vector<double>& GridXBuf,
-    std::vector<double>& DensityBuf
-)
+static s_KDEResult EvaluateKDE(
+    const std::vector<double>& prices,
+    const std::vector<double>& weights,
+    double h,
+    double tickSize,
+    float minProminencePct)
 {
-    s_DynamicKDEOutput fallback;
+    s_KDEResult res;
+    res.MaxDensity = 0.0f;
 
-    if (sc.VolumeAtPriceForBars == nullptr || sIdx > eIdx)
-        return fallback;
+    const int M = static_cast<int>(prices.size());
+    if (M < 3 || h <= 0.0)
+        return res;
 
-    std::map<int, double> VolMap;
-    double TotalVol = 0.0;
+    // Grid with 4h margin on each side
+    double dataMin = prices.front();
+    double dataMax = prices.back();
+    double gridMin = dataMin - 4.0 * h;
+    double gridMax = dataMax + 4.0 * h;
 
-    for (int b = sIdx; b <= eIdx; ++b)
+    double gridStep = sjMin((dataMax - dataMin) / 1499.0, h / 2.5);
+    gridStep = sjMax(gridStep, tickSize);
+
+    int numPts = sjClamp(static_cast<int>((gridMax - gridMin) / gridStep) + 1, 20, 2000);
+    res.GridPrices.resize(numPts);
+    res.GridDensity.resize(numPts, 0.0f);
+
+    const double inv2hsq = 1.0 / (2.0 * h * h);
+    const double norm    = 1.0 / (sqrt(2.0 * SJ_PI) * h);
+
+    for (int k = 0; k < numPts; ++k)
     {
-        const int VAPSize = sc.VolumeAtPriceForBars->GetSizeAtBarIndex(b);
-        for (int v = 0; v < VAPSize; ++v)
-        {
-            const s_VolumeAtPriceV2* p_VAP = nullptr;
-            if (!sc.VolumeAtPriceForBars->GetVAPElementAtIndex(b, v, &p_VAP) || p_VAP == nullptr)
-                break;
-            if (p_VAP->Volume > 0)
-            {
-                VolMap[p_VAP->PriceInTicks] += static_cast<double>(p_VAP->Volume);
-                TotalVol += static_cast<double>(p_VAP->Volume);
-            }
-        }
-    }
+        double xk = gridMin + k * gridStep;
+        res.GridPrices[k] = static_cast<float>(xk);
 
-    if (VolMap.size() < 3 || TotalVol <= 0.0)
-        return fallback;
-
-    const int M = static_cast<int>(VolMap.size());
-    PricesBuf.resize(M);
-    WeightsBuf.resize(M);
-    double WeightedMean = 0.0;
-    int idx = 0;
-    for (auto it = VolMap.begin(); it != VolMap.end(); ++it, ++idx)
-    {
-        PricesBuf[idx] = it->first * static_cast<double>(sc.TickSize);
-        WeightsBuf[idx] = it->second / TotalVol;
-        WeightedMean += WeightsBuf[idx] * PricesBuf[idx];
-    }
-
-    double WeightedVar = 0.0;
-    double SumSqW = 0.0;
-    for (int i = 0; i < M; ++i)
-    {
-        double diff = PricesBuf[i] - WeightedMean;
-        WeightedVar += WeightsBuf[i] * diff * diff;
-        SumSqW += WeightsBuf[i] * WeightsBuf[i];
-    }
-    double Sigma = sqrt(SJ_Max(WeightedVar, 1e-6));
-    double n_eff = (SumSqW > 1e-12) ? (1.0 / SumSqW) : static_cast<double>(M);
-
-    double CumW = 0.0;
-    double Q25 = PricesBuf.front();
-    double Q75 = PricesBuf.back();
-    bool FoundQ25 = false;
-    for (int i = 0; i < M; ++i)
-    {
-        CumW += WeightsBuf[i];
-        if (!FoundQ25 && CumW >= 0.25)
-        {
-            Q25 = PricesBuf[i];
-            FoundQ25 = true;
-        }
-        if (CumW >= 0.75)
-        {
-            Q75 = PricesBuf[i];
-            break;
-        }
-    }
-    double IQR = Q75 - Q25;
-    double ScaleParam = (IQR > 0.0) ? SJ_Min(Sigma, IQR / 1.349) : Sigma;
-    if (ScaleParam <= 0.0) ScaleParam = Sigma;
-
-    double h_0 = pow(4.0 / (3.0 * n_eff), 0.2) * ScaleParam;
-    h_0 = SJ_Max(h_0, static_cast<double>(sc.TickSize));
-
-    double S = 0.0;
-    const double h_0_sq = h_0 * h_0;
-    for (int i = 0; i < M; ++i)
-    {
-        S += WeightsBuf[i] * WeightsBuf[i] * 0.75;
-        for (int j = i + 1; j < M; ++j)
-        {
-            double diff = PricesBuf[i] - PricesBuf[j];
-            double r_sq = (diff * diff) / h_0_sq;
-            if (r_sq > 36.0) break; // data is sorted (from std::map), so all j>current are farther
-            double W = exp(-r_sq / 4.0);
-            double P = (r_sq * r_sq) / 16.0 - (3.0 * r_sq) / 4.0 + 0.75;
-            S += 2.0 * WeightsBuf[i] * WeightsBuf[j] * W * P;
-        }
-    }
-    S = S / (sqrt(4.0 * SJ_PI) * pow(h_0, 5));
-    if (S <= 1e-12) S = 1e-12;
-
-    double R_K = 1.0 / (2.0 * sqrt(SJ_PI));
-    double h_SJ = pow(R_K / (n_eff * S), 0.2) * BandwidthMultiplier;
-    h_SJ = SJ_Max(h_SJ, static_cast<double>(sc.TickSize));
-
-    // Adaptive grid matching static profile: ensures adequate samples across each peak
-    double TickSz = static_cast<double>(sc.TickSize);
-    double DataMin = PricesBuf.front();
-    double DataMax = PricesBuf.back();
-    double DataRange = SJ_Max(DataMax - DataMin, TickSz);
-    double GridMin = DataMin - 4.0 * h_SJ;
-    double GridMax = DataMax + 4.0 * h_SJ;
-    double GridStep = SJ_Min(DataRange / 1499.0, h_SJ / 2.5);
-    GridStep = SJ_Max(GridStep, TickSz);
-    int NumGridPoints = static_cast<int>((GridMax - GridMin) / GridStep) + 1;
-    NumGridPoints = SJ_Clamp(NumGridPoints, 20, 2000);
-
-    GridXBuf.resize(NumGridPoints);
-    DensityBuf.assign(NumGridPoints, 0.0);
-    double MaxDensity = 0.0;
-    const double InvTwoHSq = 1.0 / (2.0 * h_SJ * h_SJ);
-    const double NormConst = 1.0 / (sqrt(2.0 * SJ_PI) * h_SJ);
-
-    for (int k = 0; k < NumGridPoints; ++k)
-    {
-        GridXBuf[k] = GridMin + k * GridStep;
         double sum = 0.0;
         for (int i = 0; i < M; ++i)
         {
-            double d = GridXBuf[k] - PricesBuf[i];
-            double arg = d * d * InvTwoHSq;
+            double d = xk - prices[i];
+            double arg = d * d * inv2hsq;
             if (arg < 18.0)
-                sum += WeightsBuf[i] * exp(-arg);
+                sum += weights[i] * exp(-arg);
         }
-        DensityBuf[k] = sum * NormConst;
-        if (DensityBuf[k] > MaxDensity) MaxDensity = DensityBuf[k];
+        res.GridDensity[k] = static_cast<float>(sum * norm);
+        if (res.GridDensity[k] > res.MaxDensity)
+            res.MaxDensity = res.GridDensity[k];
     }
 
-    struct Candidate {
-        double Price;
-        double Density;
-    };
-    std::vector<Candidate> RawPeaks;
-    std::vector<Candidate> RawValleys;
+    if (res.MaxDensity <= 0.0f)
+        return res;
 
-    for (int k = 1; k < NumGridPoints - 1; ++k)
+    // --- Peak detection with minimum spacing ---
+    const int minDist = sjMax(2, static_cast<int>(round((h * 0.7) / gridStep)));
+
+    struct RawPeak { int idx; float price; float density; };
+    std::vector<RawPeak> candidates;
+
+    for (int k = 1; k < numPts - 1; ++k)
     {
-        if (DensityBuf[k] > DensityBuf[k - 1] && DensityBuf[k] >= DensityBuf[k + 1])
+        if (res.GridDensity[k] > res.GridDensity[k - 1] &&
+            res.GridDensity[k] > res.GridDensity[k + 1])
         {
-            // Parabolic interpolation for sub-grid peak resolution
-            double interpPrice = GridXBuf[k];
-            double interpDensity = DensityBuf[k];
-            double denom = DensityBuf[k - 1] - 2.0 * DensityBuf[k] + DensityBuf[k + 1];
+            // Parabolic interpolation for sub-grid resolution
+            float interpPrice = res.GridPrices[k];
+            double denom = res.GridDensity[k-1] - 2.0*res.GridDensity[k] + res.GridDensity[k+1];
             if (fabs(denom) > 1e-15)
             {
-                double offset = 0.5 * (DensityBuf[k - 1] - DensityBuf[k + 1]) / denom;
-                offset = SJ_Clamp(offset, -0.5, 0.5);
-                interpPrice = GridXBuf[k] + offset * GridStep;
-                interpDensity = DensityBuf[k] - 0.25 * (DensityBuf[k - 1] - DensityBuf[k + 1]) * offset;
+                double off = 0.5 * (res.GridDensity[k-1] - res.GridDensity[k+1]) / denom;
+                off = sjClamp(off, -0.5, 0.5);
+                interpPrice = static_cast<float>(res.GridPrices[k] + off * gridStep);
             }
-            RawPeaks.push_back({interpPrice, interpDensity});
-        }
-        else if (DensityBuf[k] < DensityBuf[k - 1] && DensityBuf[k] <= DensityBuf[k + 1])
-        {
-            // Parabolic interpolation for sub-grid valley resolution
-            double interpPrice = GridXBuf[k];
-            double interpDensity = DensityBuf[k];
-            double denom = DensityBuf[k - 1] - 2.0 * DensityBuf[k] + DensityBuf[k + 1];
-            if (fabs(denom) > 1e-15)
-            {
-                double offset = 0.5 * (DensityBuf[k - 1] - DensityBuf[k + 1]) / denom;
-                offset = SJ_Clamp(offset, -0.5, 0.5);
-                interpPrice = GridXBuf[k] + offset * GridStep;
-                interpDensity = DensityBuf[k] - 0.25 * (DensityBuf[k - 1] - DensityBuf[k + 1]) * offset;
-            }
-            RawValleys.push_back({interpPrice, interpDensity});
+            candidates.push_back({k, interpPrice, res.GridDensity[k]});
         }
     }
 
-    // Fallback: if KDE has no local maximum, use the global max
-    if (RawPeaks.empty())
+    // Fallback: if no local max found, use global max
+    if (candidates.empty())
     {
-        int BestK = 0;
-        for (int k = 1; k < NumGridPoints; ++k)
-            if (DensityBuf[k] > DensityBuf[BestK]) BestK = k;
-        double interpPrice = GridXBuf[BestK];
-        if (BestK > 0 && BestK < NumGridPoints - 1)
-        {
-            double denom = DensityBuf[BestK - 1] - 2.0 * DensityBuf[BestK] + DensityBuf[BestK + 1];
-            if (fabs(denom) > 1e-15)
-            {
-                double offset = 0.5 * (DensityBuf[BestK - 1] - DensityBuf[BestK + 1]) / denom;
-                offset = SJ_Clamp(offset, -0.5, 0.5);
-                interpPrice = GridXBuf[BestK] + offset * GridStep;
-            }
-        }
-        RawPeaks.push_back({interpPrice, DensityBuf[BestK]});
+        int best = 0;
+        for (int k = 1; k < numPts; ++k)
+            if (res.GridDensity[k] > res.GridDensity[best]) best = k;
+        candidates.push_back({best, res.GridPrices[best], res.GridDensity[best]});
     }
 
-    // --- OUTPUT: Top K by density, assigned to tracks by price order ---
-    s_DynamicKDEOutput out;
-    out.Bandwidth = static_cast<float>(h_SJ);
+    // Suppress micro-ripples: keep dominant peak within minDist
+    std::vector<RawPeak> filtered;
+    for (size_t i = 0; i < candidates.size(); ++i)
+    {
+        bool dominant = true;
+        for (size_t j = 0; j < candidates.size(); ++j)
+        {
+            if (i == j) continue;
+            if (abs(candidates[i].idx - candidates[j].idx) <= minDist &&
+                candidates[j].density > candidates[i].density)
+            {
+                dominant = false;
+                break;
+            }
+        }
+        if (dominant) filtered.push_back(candidates[i]);
+    }
 
-    // HVNs: sort by density descending, take top MaxTracks, then sort by price ascending for stable track identity
-    std::sort(RawPeaks.begin(), RawPeaks.end(), [](const Candidate& a, const Candidate& b) {
-        return a.Density > b.Density;
-    });
-    int nPeaks = SJ_Min(MaxTracks, static_cast<int>(RawPeaks.size()));
-    std::vector<Candidate> TopPeaks(RawPeaks.begin(), RawPeaks.begin() + nPeaks);
-    std::sort(TopPeaks.begin(), TopPeaks.end(), [](const Candidate& a, const Candidate& b) {
-        return a.Price < b.Price;
-    });
-    for (int t = 0; t < nPeaks; ++t)
-        out.HVN[t] = static_cast<float>(TopPeaks[t].Price);
+    // --- Topographic prominence for each peak ---
+    const float minPromThreshold = (minProminencePct / 100.0f) * res.MaxDensity;
 
-    // LVNs: sort by density ascending (deepest valleys first), take top MaxTracks, then sort by price ascending
-    std::sort(RawValleys.begin(), RawValleys.end(), [](const Candidate& a, const Candidate& b) {
-        return a.Density < b.Density;
-    });
-    int nValleys = SJ_Min(MaxTracks, static_cast<int>(RawValleys.size()));
-    std::vector<Candidate> TopValleys(RawValleys.begin(), RawValleys.begin() + nValleys);
-    std::sort(TopValleys.begin(), TopValleys.end(), [](const Candidate& a, const Candidate& b) {
-        return a.Price < b.Price;
-    });
-    for (int t = 0; t < nValleys; ++t)
-        out.LVN[t] = static_cast<float>(TopValleys[t].Price);
+    for (size_t p = 0; p < filtered.size(); ++p)
+    {
+        const int k = filtered[p].idx;
+        const float peakD = filtered[p].density;
+
+        // Left saddle: deepest point before encountering higher ground
+        float leftMin = peakD;
+        for (int l = k - 1; l >= 0; --l)
+        {
+            if (res.GridDensity[l] > peakD) break;
+            if (res.GridDensity[l] < leftMin) leftMin = res.GridDensity[l];
+        }
+        // Right saddle
+        float rightMin = peakD;
+        for (int r = k + 1; r < numPts; ++r)
+        {
+            if (res.GridDensity[r] > peakD) break;
+            if (res.GridDensity[r] < rightMin) rightMin = res.GridDensity[r];
+        }
+
+        float keyCol = sjMax(leftMin, rightMin);
+        float prominence = peakD - keyCol;
+        float promRatio = sjClamp(prominence / res.MaxDensity, 0.0f, 1.0f);
+
+        if (prominence >= minPromThreshold ||
+            (peakD >= 0.30f * res.MaxDensity && promRatio >= 0.015f))
+        {
+            s_Level lvl;
+            lvl.Price = filtered[p].price;
+            lvl.Density = peakD;
+            lvl.Prominence = sjMax(promRatio, peakD / res.MaxDensity * 0.35f);
+            lvl.Prominence = sjClamp(lvl.Prominence, 0.05f, 1.0f);
+            lvl.IsHVN = true;
+            res.HVNs.push_back(lvl);
+        }
+    }
+
+    // --- LVN detection: deepest valley between adjacent HVNs ---
+    std::vector<s_Level> hvnByPrice = res.HVNs;
+    std::sort(hvnByPrice.begin(), hvnByPrice.end(),
+              [](const s_Level& a, const s_Level& b) { return a.Price < b.Price; });
+
+    for (size_t i = 0; i + 1 < hvnByPrice.size(); ++i)
+    {
+        int idxA = sjClamp(static_cast<int>(round((hvnByPrice[i].Price - gridMin) / gridStep)),
+                           0, numPts - 1);
+        int idxB = sjClamp(static_cast<int>(round((hvnByPrice[i+1].Price - gridMin) / gridStep)),
+                           0, numPts - 1);
+        if (idxA > idxB) std::swap(idxA, idxB);
+
+        int minIdx = idxA;
+        float minD = res.GridDensity[idxA];
+        for (int m = idxA + 1; m < idxB; ++m)
+        {
+            if (res.GridDensity[m] < minD) { minD = res.GridDensity[m]; minIdx = m; }
+        }
+
+        float flanking = sjMin(hvnByPrice[i].Density, hvnByPrice[i+1].Density);
+        float depth = flanking - minD;
+
+        if (depth > 0.0f && minIdx > idxA && minIdx < idxB)
+        {
+            s_Level lvn;
+            lvn.Price = res.GridPrices[minIdx];
+            lvn.Density = minD;
+            lvn.Prominence = sjClamp(depth / res.MaxDensity, 0.05f, 1.0f);
+            lvn.IsHVN = false;
+            res.LVNs.push_back(lvn);
+        }
+    }
+
+    // Sort by prominence descending
+    std::sort(res.HVNs.begin(), res.HVNs.end(),
+              [](const s_Level& a, const s_Level& b) { return a.Prominence > b.Prominence; });
+    std::sort(res.LVNs.begin(), res.LVNs.end(),
+              [](const s_Level& a, const s_Level& b) { return a.Prominence > b.Prominence; });
+
+    return res;
+}
+
+// =========================================================================
+// 4. COLOR HELPERS
+// =========================================================================
+
+static uint32_t GradientColor(COLORREF base, float prominence, int mode)
+{
+    if (mode == 2) return base;
+
+    uint8_t r = base & 0xFF;
+    uint8_t g = (base >> 8) & 0xFF;
+    uint8_t b = (base >> 16) & 0xFF;
+    float t = sjClamp(prominence, 0.0f, 1.0f);
+
+    if (mode == 0) // Darker for strongest
+    {
+        float dark  = 0.70f + 0.30f * (1.0f - t);
+        float light = (1.0f - t) * 0.60f;
+        auto mix = [&](uint8_t c) {
+            return static_cast<uint8_t>(sjClamp(c * dark * (1.0f - light) + 245.0f * light, 0.0f, 255.0f));
+        };
+        return RGB(mix(r), mix(g), mix(b));
+    }
+    else // Brighter for strongest
+    {
+        float f = 0.35f + 0.65f * t;
+        return RGB(static_cast<uint8_t>(sjClamp(r*f, 0.0f, 255.0f)),
+                   static_cast<uint8_t>(sjClamp(g*f, 0.0f, 255.0f)),
+                   static_cast<uint8_t>(sjClamp(b*f, 0.0f, 255.0f)));
+    }
+}
+
+// =========================================================================
+// 5. DYNAMIC SUBGRAPH HELPER — runs SJ per bar for evolving levels
+// =========================================================================
+
+static const int MAX_TRACKS = 5;
+
+struct s_DynOutput
+{
+    float HVN[MAX_TRACKS];
+    float LVN[MAX_TRACKS];
+    float Bandwidth;
+};
+
+static s_DynOutput ComputeDynamic(SCStudyInterfaceRef sc, int sIdx, int eIdx,
+                                  float bwMult, int maxTracks)
+{
+    s_DynOutput out = {};
+
+    s_Histogram hist = CollectHistogram(sc, sIdx, eIdx);
+    if (hist.TickVolume.size() < 3 || hist.TotalVolume <= 0.0)
+        return out;
+
+    s_SJResult sj = ComputeSJBandwidth(hist, static_cast<double>(sc.TickSize));
+    sj.Bandwidth *= bwMult;
+    sj.Bandwidth = sjMax(sj.Bandwidth, static_cast<double>(sc.TickSize));
+    out.Bandwidth = static_cast<float>(sj.Bandwidth);
+
+    s_KDEResult kde = EvaluateKDE(sj.Prices, sj.Weights, sj.Bandwidth,
+                                  static_cast<double>(sc.TickSize), 3.0f);
+
+    // Top HVNs by density, then assign to tracks by price order
+    struct Cand { double price; double density; };
+    std::vector<Cand> topPeaks;
+    for (size_t i = 0; i < kde.HVNs.size() && static_cast<int>(i) < maxTracks; ++i)
+        topPeaks.push_back({kde.HVNs[i].Price, kde.HVNs[i].Density});
+    std::sort(topPeaks.begin(), topPeaks.end(),
+              [](const Cand& a, const Cand& b) { return a.price < b.price; });
+    for (int t = 0; t < static_cast<int>(topPeaks.size()); ++t)
+        out.HVN[t] = static_cast<float>(topPeaks[t].price);
+
+    // Top LVNs
+    std::vector<Cand> topValleys;
+    for (size_t i = 0; i < kde.LVNs.size() && static_cast<int>(i) < maxTracks; ++i)
+        topValleys.push_back({kde.LVNs[i].Price, kde.LVNs[i].Density});
+    std::sort(topValleys.begin(), topValleys.end(),
+              [](const Cand& a, const Cand& b) { return a.price < b.price; });
+    for (int t = 0; t < static_cast<int>(topValleys.size()); ++t)
+        out.LVN[t] = static_cast<float>(topValleys[t].price);
 
     return out;
 }
 
-/*==========================================================================*/
+// =========================================================================
+// 6. BAR RANGE SELECTION — the ONLY chart-type-aware logic
+// =========================================================================
+
+static bool IsMacroChart(SCStudyInterfaceRef sc)
+{
+    if (sc.ArraySize < 2) return false;
+    double totalDays = sc.BaseDateTimeIn[sc.ArraySize - 1].GetAsDouble()
+                     - sc.BaseDateTimeIn[0].GetAsDouble();
+    double avgDaysPerBar = totalDays / (sc.ArraySize - 1);
+    return (sc.SecondsPerBar >= 86400 || avgDaysPerBar >= 0.70 ||
+            sc.ArraySize < 60 || (totalDays > 25.0 && sc.ArraySize < 250));
+}
+
+// Returns [startBar, endBar] for the selected scope
+static void SelectBarRange(SCStudyInterfaceRef sc, int scope, int numBarsBack,
+                           bool isMacro, int& startBar, int& endBar)
+{
+    const int last = sc.ArraySize - 1;
+    endBar = last;
+    startBar = 0;
+
+    if (scope == 0) // Current Session / Day
+    {
+        if (isMacro)
+        {
+            startBar = 0; // aggregate entire chart on macro timeframes
+        }
+        else
+        {
+            const int today = sc.GetTradingDayDate(sc.BaseDateTimeIn[last]);
+            startBar = last;
+            while (startBar > 0 &&
+                   sc.GetTradingDayDate(sc.BaseDateTimeIn[startBar - 1]) == today)
+                --startBar;
+        }
+    }
+    else if (scope == 1) // Number of Bars Back
+    {
+        startBar = sjMax(0, last - numBarsBack + 1);
+    }
+    else if (scope == 2) // Entire Chart
+    {
+        startBar = 0;
+    }
+    else if (scope == 3) // Prior Completed Session
+    {
+        const int today = sc.GetTradingDayDate(sc.BaseDateTimeIn[last]);
+        int priorEnd = last;
+        while (priorEnd >= 0 &&
+               sc.GetTradingDayDate(sc.BaseDateTimeIn[priorEnd]) == today)
+            --priorEnd;
+
+        if (priorEnd >= 0)
+        {
+            endBar = priorEnd;
+            const int priorDay = sc.GetTradingDayDate(sc.BaseDateTimeIn[priorEnd]);
+            startBar = priorEnd;
+            while (startBar > 0 &&
+                   sc.GetTradingDayDate(sc.BaseDateTimeIn[startBar - 1]) == priorDay)
+                --startBar;
+        }
+    }
+}
+
+// =========================================================================
+// 7. MAIN STUDY FUNCTION
+// =========================================================================
+
 SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
 {
-    // Subgraphs for Dynamic Moving Average Style Levels (Up to K=5 HVNs and K=5 LVNs)
-    SCSubgraphRef Sub_DynamicBandwidth = sc.Subgraph[10];
+    // --- Subgraphs: 0-4 = Dynamic HVNs, 5-9 = Dynamic LVNs, 10 = Bandwidth ---
+    SCSubgraphRef Sub_Bandwidth = sc.Subgraph[10];
 
-    // Inputs
-    SCInputRef In_ProfileScope             = sc.Input[0];
-    SCInputRef In_NumBars                  = sc.Input[1];
-    SCInputRef In_MinProminencePct         = sc.Input[2];
-    SCInputRef In_MaxHVNCount              = sc.Input[3];
-    SCInputRef In_MaxLVNCount              = sc.Input[4];
-    SCInputRef In_LineType                 = sc.Input[5];
-    SCInputRef In_HVNColor                 = sc.Input[6];
-    SCInputRef In_LVNColor                 = sc.Input[7];
-    SCInputRef In_BaseLineWidth            = sc.Input[8];
-    SCInputRef In_ScaleWidthByProminence   = sc.Input[9];
-    SCInputRef In_ColorGradientMode        = sc.Input[10];
-    SCInputRef In_EnableTransparency       = sc.Input[11];
-    SCInputRef In_CalculationIntervalSec   = sc.Input[12];
-    SCInputRef In_BandwidthMultiplier      = sc.Input[13];
-    SCInputRef In_PlotKDEProfile           = sc.Input[14];
-    SCInputRef In_KDEProfileColor          = sc.Input[15];
-    SCInputRef In_KDEProfileTransparency   = sc.Input[16];
-    SCInputRef In_KDEProfileWidthBars      = sc.Input[17];
-    SCInputRef In_BandwidthMode            = sc.Input[18];
-    SCInputRef In_FixedBandwidthPoints     = sc.Input[19];
-    SCInputRef In_KDEProfileStyle          = sc.Input[20];
-    SCInputRef In_KDEProfilePlacement      = sc.Input[21];
-    SCInputRef In_KDERightOffsetBars       = sc.Input[22];
-    SCInputRef In_KDELineWidth             = sc.Input[23];
-    SCInputRef In_LevelLabelPosition       = sc.Input[24];
-    SCInputRef In_LevelLabelFontSize       = sc.Input[25];
-    SCInputRef In_DynamicMode              = sc.Input[26];
-    SCInputRef In_DynamicWindowBars        = sc.Input[27];
-    SCInputRef In_DynamicMaxHistoryBars    = sc.Input[28];
-    SCInputRef In_DynamicMaxLevels         = sc.Input[29];
-    SCInputRef In_DrawStaticLevels         = sc.Input[30];
+    // --- Inputs ---
+    SCInputRef In_ProfileScope           = sc.Input[0];
+    SCInputRef In_NumBars                = sc.Input[1];
+    SCInputRef In_MinProminencePct       = sc.Input[2];
+    SCInputRef In_MaxHVNCount            = sc.Input[3];
+    SCInputRef In_MaxLVNCount            = sc.Input[4];
+    SCInputRef In_LineType               = sc.Input[5];
+    SCInputRef In_HVNColor               = sc.Input[6];
+    SCInputRef In_LVNColor               = sc.Input[7];
+    SCInputRef In_BaseLineWidth          = sc.Input[8];
+    SCInputRef In_ScaleWidthByProminence = sc.Input[9];
+    SCInputRef In_ColorGradientMode      = sc.Input[10];
+    SCInputRef In_EnableTransparency     = sc.Input[11];
+    SCInputRef In_CalcIntervalSec        = sc.Input[12];
+    SCInputRef In_BandwidthMultiplier    = sc.Input[13];
+    SCInputRef In_PlotKDE                = sc.Input[14];
+    SCInputRef In_KDEColor               = sc.Input[15];
+    SCInputRef In_KDETransparency        = sc.Input[16];
+    SCInputRef In_KDEWidthBars           = sc.Input[17];
+    SCInputRef In_BandwidthMode          = sc.Input[18];
+    SCInputRef In_FixedBandwidthPts      = sc.Input[19];
+    SCInputRef In_KDEStyle               = sc.Input[20];
+    SCInputRef In_KDEPlacement           = sc.Input[21];
+    SCInputRef In_KDERightOffset         = sc.Input[22];
+    SCInputRef In_KDELineWidth           = sc.Input[23];
+    SCInputRef In_LabelPosition          = sc.Input[24];
+    SCInputRef In_LabelFontSize          = sc.Input[25];
+    SCInputRef In_DynamicMode            = sc.Input[26];
+    SCInputRef In_DynamicWindowBars      = sc.Input[27];
+    SCInputRef In_DynamicMaxHistory      = sc.Input[28];
+    SCInputRef In_DynamicMaxLevels       = sc.Input[29];
+    SCInputRef In_DrawStaticLevels       = sc.Input[30];
 
-    // Persistent storage for tracking drawn lines
     int& r_LastDrawnCount = sc.GetPersistentInt(1);
     SCDateTime& r_LastCalcTime = sc.GetPersistentSCDateTime(2);
 
+    // -----------------------------------------------------------------
+    // DEFAULTS
+    // -----------------------------------------------------------------
     if (sc.SetDefaults)
     {
-        sc.GraphName = "Sheather-Jones Volume Profile Levels";
-        sc.AutoLoop = 0; // Manual loop: whole profile calculation
-        sc.GraphRegion = 0; // Main price chart
+        sc.GraphName = "Sheather-Jones Volume Profile";
+        sc.AutoLoop = 0;
+        sc.GraphRegion = 0;
         sc.CalculationPrecedence = LOW_PREC_LEVEL;
 
-        // Dynamic HVNs (Green palette)
-        const char* HVNNames[5] = {
-            "Dynamic HVN 1 (Primary Peak)",
-            "Dynamic HVN 2",
-            "Dynamic HVN 3",
-            "Dynamic HVN 4",
-            "Dynamic HVN 5"
+        const char* hvnNames[5] = {
+            "Dynamic HVN 1 (Primary)", "Dynamic HVN 2",
+            "Dynamic HVN 3", "Dynamic HVN 4", "Dynamic HVN 5"
         };
-        const COLORREF HVNColors[5] = {
-            RGB(0, 160, 75),   // Dark Forest Green
-            RGB(0, 200, 95),   // Rich Green
-            RGB(46, 204, 113), // Emerald Green
-            RGB(72, 220, 150), // Mint Green
-            RGB(120, 230, 180) // Soft Sage Green
+        const COLORREF hvnColors[5] = {
+            RGB(0,160,75), RGB(0,200,95), RGB(46,204,113),
+            RGB(72,220,150), RGB(120,230,180)
         };
-        const int HVNWidths[5] = { 2, 2, 1, 1, 1 };
-
         for (int t = 0; t < 5; ++t)
         {
-            sc.Subgraph[t].Name = HVNNames[t];
+            sc.Subgraph[t].Name = hvnNames[t];
             sc.Subgraph[t].DrawStyle = DRAWSTYLE_LINE_SKIP_ZEROS;
-            sc.Subgraph[t].PrimaryColor = HVNColors[t];
-            sc.Subgraph[t].LineWidth = HVNWidths[t];
+            sc.Subgraph[t].PrimaryColor = hvnColors[t];
+            sc.Subgraph[t].LineWidth = (t < 2) ? 2 : 1;
             sc.Subgraph[t].DrawZeros = false;
         }
 
-        // Dynamic LVNs (Crimson/Red palette)
-        const char* LVNNames[5] = {
-            "Dynamic LVN 1 (Primary Valley)",
-            "Dynamic LVN 2",
-            "Dynamic LVN 3",
-            "Dynamic LVN 4",
-            "Dynamic LVN 5"
+        const char* lvnNames[5] = {
+            "Dynamic LVN 1 (Primary)", "Dynamic LVN 2",
+            "Dynamic LVN 3", "Dynamic LVN 4", "Dynamic LVN 5"
         };
-        const COLORREF LVNColors[5] = {
-            RGB(220, 30, 30),  // Crimson Red
-            RGB(245, 50, 50),  // Bright Red
-            RGB(255, 99, 71),  // Coral Red
-            RGB(240, 128, 128),// Light Coral
-            RGB(250, 160, 160) // Soft Rose
+        const COLORREF lvnColors[5] = {
+            RGB(220,30,30), RGB(245,50,50), RGB(255,99,71),
+            RGB(240,128,128), RGB(250,160,160)
         };
-        const int LVNWidths[5] = { 2, 2, 1, 1, 1 };
-
         for (int t = 0; t < 5; ++t)
         {
-            sc.Subgraph[5 + t].Name = LVNNames[t];
-            sc.Subgraph[5 + t].DrawStyle = DRAWSTYLE_DASH;
-            sc.Subgraph[5 + t].PrimaryColor = LVNColors[t];
-            sc.Subgraph[5 + t].LineWidth = LVNWidths[t];
-            sc.Subgraph[5 + t].DrawZeros = false;
+            sc.Subgraph[5+t].Name = lvnNames[t];
+            sc.Subgraph[5+t].DrawStyle = DRAWSTYLE_DASH;
+            sc.Subgraph[5+t].PrimaryColor = lvnColors[t];
+            sc.Subgraph[5+t].LineWidth = (t < 2) ? 2 : 1;
+            sc.Subgraph[5+t].DrawZeros = false;
         }
 
-        Sub_DynamicBandwidth.Name = "Dynamic Bandwidth (h)";
-        Sub_DynamicBandwidth.DrawStyle = DRAWSTYLE_IGNORE;
+        Sub_Bandwidth.Name = "Dynamic Bandwidth (h)";
+        Sub_Bandwidth.DrawStyle = DRAWSTYLE_IGNORE;
 
         In_ProfileScope.Name = "Profile Scope";
-        In_ProfileScope.SetCustomInputStrings("Current Session / Day;Number of Bars Back;Entire Chart;Prior Completed Session");
+        In_ProfileScope.SetCustomInputStrings(
+            "Current Session / Day;Number of Bars Back;Entire Chart;Prior Completed Session");
         In_ProfileScope.SetCustomInputIndex(0);
 
-        In_NumBars.Name = "Number of Bars Back (if Scope = Number of Bars Back)";
-        In_NumBars.SetInt(390); // 390 1-min bars = standard 6.5h RTH session
+        In_NumBars.Name = "Number of Bars Back (if Scope = Bars Back)";
+        In_NumBars.SetInt(390);
         In_NumBars.SetIntLimits(10, 50000);
 
         In_MinProminencePct.Name = "Minimum Peak Prominence % (0-100)";
         In_MinProminencePct.SetFloat(3.0f);
         In_MinProminencePct.SetFloatLimits(0.1f, 100.0f);
 
-        In_MaxHVNCount.Name = "Maximum HVN (Peak) Lines to Draw";
+        In_MaxHVNCount.Name = "Maximum HVN Lines";
         In_MaxHVNCount.SetInt(6);
         In_MaxHVNCount.SetIntLimits(1, 25);
 
-        In_MaxLVNCount.Name = "Maximum LVN (Valley) Lines to Draw";
+        In_MaxLVNCount.Name = "Maximum LVN Lines";
         In_MaxLVNCount.SetInt(4);
         In_MaxLVNCount.SetIntLimits(0, 25);
 
@@ -458,1091 +631,542 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         In_LineType.SetCustomInputStrings("Horizontal Line;Horizontal Ray");
         In_LineType.SetCustomInputIndex(0);
 
-        In_HVNColor.Name = "HVN (High Volume Node) Base Color";
-        In_HVNColor.SetColor(RGB(0, 185, 90)); // Rich Green
+        In_HVNColor.Name = "HVN Base Color";
+        In_HVNColor.SetColor(RGB(0, 185, 90));
 
-        In_LVNColor.Name = "LVN (Low Volume Node) Base Color";
-        In_LVNColor.SetColor(RGB(225, 45, 45));  // Rich Crimson Red
+        In_LVNColor.Name = "LVN Base Color";
+        In_LVNColor.SetColor(RGB(225, 45, 45));
 
         In_BaseLineWidth.Name = "Base Line Width";
         In_BaseLineWidth.SetInt(2);
         In_BaseLineWidth.SetIntLimits(1, 10);
 
-        In_ScaleWidthByProminence.Name = "Scale Line Width by Prominence";
+        In_ScaleWidthByProminence.Name = "Scale Width by Prominence";
         In_ScaleWidthByProminence.SetYesNo(1);
 
         In_ColorGradientMode.Name = "Color Gradient Style";
-        In_ColorGradientMode.SetCustomInputStrings("Darker for Strongest, Lighter for Weakest;Brighter for Strongest, Dimmer for Weakest;Solid Base Color Only");
+        In_ColorGradientMode.SetCustomInputStrings(
+            "Darker for Strongest;Brighter for Strongest;Solid Color");
         In_ColorGradientMode.SetCustomInputIndex(0);
 
-        In_EnableTransparency.Name = "Apply Transparency Gradient (Strong=Solid, Weak=Faint)";
+        In_EnableTransparency.Name = "Transparency Gradient";
         In_EnableTransparency.SetYesNo(1);
 
-        In_CalculationIntervalSec.Name = "Recalculation Interval in Seconds";
-        In_CalculationIntervalSec.SetInt(15);
-        In_CalculationIntervalSec.SetIntLimits(1, 300);
+        In_CalcIntervalSec.Name = "Recalculation Interval (seconds)";
+        In_CalcIntervalSec.SetInt(15);
+        In_CalcIntervalSec.SetIntLimits(1, 300);
 
-        In_BandwidthMultiplier.Name = "Bandwidth Multiplier (1.0 = Default, <1.0 = Sharper, >1.0 = Smoother)";
+        In_BandwidthMultiplier.Name = "Bandwidth Multiplier (<1 sharper, >1 smoother)";
         In_BandwidthMultiplier.SetFloat(1.0f);
         In_BandwidthMultiplier.SetFloatLimits(0.1f, 5.0f);
 
-        In_PlotKDEProfile.Name = "Plot KDE Density Profile on Chart";
-        In_PlotKDEProfile.SetYesNo(1);
+        In_PlotKDE.Name = "Plot KDE Profile on Chart";
+        In_PlotKDE.SetYesNo(1);
 
-        In_KDEProfileColor.Name = "KDE Profile Color";
-        In_KDEProfileColor.SetColor(RGB(70, 130, 180)); // Steel Blue
+        In_KDEColor.Name = "KDE Profile Color";
+        In_KDEColor.SetColor(RGB(70, 130, 180));
 
-        In_KDEProfileTransparency.Name = "KDE Profile Transparency % (0-95)";
-        In_KDEProfileTransparency.SetInt(50);
-        In_KDEProfileTransparency.SetIntLimits(0, 95);
+        In_KDETransparency.Name = "KDE Transparency % (0-95)";
+        In_KDETransparency.SetInt(50);
+        In_KDETransparency.SetIntLimits(0, 95);
 
-        In_KDEProfileWidthBars.Name = "KDE Profile Display Width (in Bars)";
-        In_KDEProfileWidthBars.SetInt(35);
-        In_KDEProfileWidthBars.SetIntLimits(5, 300);
+        In_KDEWidthBars.Name = "KDE Profile Width (bars)";
+        In_KDEWidthBars.SetInt(35);
+        In_KDEWidthBars.SetIntLimits(5, 300);
 
-        In_BandwidthMode.Name = "Bandwidth Selection Mode";
-        In_BandwidthMode.SetCustomInputStrings("Sheather-Jones (Pure);Sheather-Jones (Pure);Fixed Points");
+        In_BandwidthMode.Name = "Bandwidth Mode";
+        In_BandwidthMode.SetCustomInputStrings("Sheather-Jones;Fixed Points");
         In_BandwidthMode.SetCustomInputIndex(0);
 
-        In_FixedBandwidthPoints.Name = "Fixed Bandwidth in Points (if Mode = Fixed Points)";
-        In_FixedBandwidthPoints.SetFloat(5.0f);
-        In_FixedBandwidthPoints.SetFloatLimits(0.25f, 500.0f);
+        In_FixedBandwidthPts.Name = "Fixed Bandwidth (points)";
+        In_FixedBandwidthPts.SetFloat(5.0f);
+        In_FixedBandwidthPts.SetFloatLimits(0.25f, 500.0f);
 
-        In_KDEProfileStyle.Name = "KDE Display Style";
-        In_KDEProfileStyle.SetCustomInputStrings("Smooth Envelope Curve;Filled Density Bars;Both (Curve + Bars)");
-        In_KDEProfileStyle.SetCustomInputIndex(0);
+        In_KDEStyle.Name = "KDE Display Style";
+        In_KDEStyle.SetCustomInputStrings(
+            "Smooth Envelope;Filled Bars;Both");
+        In_KDEStyle.SetCustomInputIndex(0);
 
-        In_KDEProfilePlacement.Name = "KDE Profile Placement";
-        In_KDEProfilePlacement.SetCustomInputStrings("Right Margin (Right of Price Bars);Right Edge (Aligned with Native VP);Over Price Action (Leftward from Last Bar)");
-        In_KDEProfilePlacement.SetCustomInputIndex(0);
+        In_KDEPlacement.Name = "KDE Placement";
+        In_KDEPlacement.SetCustomInputStrings(
+            "Right Margin;Right Edge (VP aligned);Over Price Action");
+        In_KDEPlacement.SetCustomInputIndex(0);
 
-        In_KDERightOffsetBars.Name = "KDE Right Margin Offset (in Bars)";
-        In_KDERightOffsetBars.SetInt(6);
-        In_KDERightOffsetBars.SetIntLimits(0, 300);
+        In_KDERightOffset.Name = "KDE Right Offset (bars)";
+        In_KDERightOffset.SetInt(6);
+        In_KDERightOffset.SetIntLimits(0, 300);
 
-        In_KDELineWidth.Name = "KDE Envelope Line Width";
+        In_KDELineWidth.Name = "KDE Line Width";
         In_KDELineWidth.SetInt(2);
         In_KDELineWidth.SetIntLimits(1, 10);
 
-        In_LevelLabelPosition.Name = "Level Label Position";
-        In_LevelLabelPosition.SetCustomInputStrings("Right Side (Clear of Bars);Left Side;Hide Labels (Lines Only)");
-        In_LevelLabelPosition.SetCustomInputIndex(0);
+        In_LabelPosition.Name = "Label Position";
+        In_LabelPosition.SetCustomInputStrings("Right Side;Left Side;Hidden");
+        In_LabelPosition.SetCustomInputIndex(0);
 
-        In_LevelLabelFontSize.Name = "Level Label Font Size";
-        In_LevelLabelFontSize.SetInt(8);
-        In_LevelLabelFontSize.SetIntLimits(6, 24);
+        In_LabelFontSize.Name = "Label Font Size";
+        In_LabelFontSize.SetInt(8);
+        In_LabelFontSize.SetIntLimits(6, 24);
 
-        In_DynamicMode.Name = "Dynamic Evolution Mode (Moving Average Style)";
-        In_DynamicMode.SetCustomInputStrings("Rolling Window (Moving Average Style);Session Developing (Cumulative);Entire Chart Developing;Disabled");
+        In_DynamicMode.Name = "Dynamic Mode";
+        In_DynamicMode.SetCustomInputStrings(
+            "Rolling Window;Session Developing;Entire Chart Developing;Disabled");
         In_DynamicMode.SetCustomInputIndex(1);
 
-        In_DynamicWindowBars.Name = "Dynamic Rolling Window (in Bars)";
+        In_DynamicWindowBars.Name = "Dynamic Window (bars)";
         In_DynamicWindowBars.SetInt(60);
         In_DynamicWindowBars.SetIntLimits(5, 2000);
 
-        In_DynamicMaxHistoryBars.Name = "Dynamic History Depth (in Bars)";
-        In_DynamicMaxHistoryBars.SetInt(500);
-        In_DynamicMaxHistoryBars.SetIntLimits(20, 10000);
+        In_DynamicMaxHistory.Name = "Dynamic History Depth (bars)";
+        In_DynamicMaxHistory.SetInt(500);
+        In_DynamicMaxHistory.SetIntLimits(20, 10000);
 
-        In_DynamicMaxLevels.Name = "Number of Dynamic Levels to Track (1-5)";
+        In_DynamicMaxLevels.Name = "Dynamic Levels (1-5)";
         In_DynamicMaxLevels.SetInt(5);
         In_DynamicMaxLevels.SetIntLimits(1, 5);
 
-        In_DrawStaticLevels.Name = "Draw Static S/R Horizontal Lines & Labels";
+        In_DrawStaticLevels.Name = "Draw Static Levels & Profile";
         In_DrawStaticLevels.SetYesNo(1);
 
         return;
     }
 
-    const int MaxAllowedDrawnLines = 280;
-    const int BaseLineNumber = 800000 + (sc.StudyGraphInstanceID * 300);
+    // -----------------------------------------------------------------
+    // LIFECYCLE
+    // -----------------------------------------------------------------
+    const int MaxDrawn = 280;
+    const int BaseLine = 800000 + (sc.StudyGraphInstanceID * 300);
 
-    // Clean up all drawings when study is removed or reloaded
     if (sc.LastCallToFunction)
     {
-        for (int i = 0; i < MaxAllowedDrawnLines; ++i)
-        {
-            sc.DeleteACSChartDrawing(sc.ChartNumber, TOOL_DELETE_CHARTDRAWING, BaseLineNumber + i);
-        }
+        for (int i = 0; i < MaxDrawn; ++i)
+            sc.DeleteACSChartDrawing(sc.ChartNumber, TOOL_DELETE_CHARTDRAWING, BaseLine + i);
         r_LastDrawnCount = 0;
         return;
     }
 
-    // Rate-limit calculations to avoid unnecessary recalculation on every single tick
-    const int CalcInterval = SJ_Max(1, In_CalculationIntervalSec.GetInt());
-    SCDateTime CurrentDateTime = sc.CurrentSystemDateTime;
-    if (r_LastCalcTime.GetTimeInSeconds() > 0 && 
-        (CurrentDateTime.GetTimeInSeconds() - r_LastCalcTime.GetTimeInSeconds()) < CalcInterval &&
+    // Rate-limit
+    const int interval = sjMax(1, In_CalcIntervalSec.GetInt());
+    SCDateTime now = sc.CurrentSystemDateTime;
+    if (r_LastCalcTime.GetTimeInSeconds() > 0 &&
+        (now.GetTimeInSeconds() - r_LastCalcTime.GetTimeInSeconds()) < interval &&
         sc.UpdateStartIndex > 0)
-    {
         return;
-    }
-    r_LastCalcTime = CurrentDateTime;
+    r_LastCalcTime = now;
 
-    if (sc.ArraySize < 1)
-        return;
+    if (sc.ArraySize < 1) return;
 
     if (sc.VolumeAtPriceForBars == nullptr)
     {
-        sc.AddMessageToLog("Sheather-Jones Study Notice: No Volume-At-Price data found on this chart. If this is a Historical Daily/Yearly chart (.dly), open an Intraday Chart (.scid) with daily bars to access tick volume profile.", 1);
+        sc.AddMessageToLog("SJ Volume Profile: No Volume-At-Price data. "
+            "Use an Intraday chart (.scid) for tick-level volume.", 1);
         return;
     }
 
-    // -------------------------------------------------------------------------
-    // 0. Dynamic Evolving Levels (Moving Average Style Subgraphs)
-    // -------------------------------------------------------------------------
-    const int DynMode = In_DynamicMode.GetIndex();
-    if (DynMode != 3) // 0 = Rolling Window, 1 = Session Developing, 2 = Entire Chart, 3 = Disabled
+    const bool isMacro = IsMacroChart(sc);
+    const float bwMult = sjClamp(In_BandwidthMultiplier.GetFloat(), 0.1f, 5.0f);
+
+    // -----------------------------------------------------------------
+    // A. DYNAMIC EVOLVING LEVELS (subgraphs 0-9)
+    // -----------------------------------------------------------------
+    const int dynMode = In_DynamicMode.GetIndex();
+    if (dynMode != 3) // 0=Rolling, 1=Session, 2=EntireChart, 3=Disabled
     {
-        const int WindowBars = SJ_Max(5, In_DynamicWindowBars.GetInt());
-        const int MaxHistBars = SJ_Max(20, In_DynamicMaxHistoryBars.GetInt());
-        const int MaxTracks = SJ_Clamp(In_DynamicMaxLevels.GetInt(), 1, 5);
-        const float BwMultiplier = In_BandwidthMultiplier.GetFloat();
+        const int windowBars = sjMax(5, In_DynamicWindowBars.GetInt());
+        const int maxHist    = sjMax(20, In_DynamicMaxHistory.GetInt());
+        const int maxTracks  = sjClamp(In_DynamicMaxLevels.GetInt(), 1, 5);
 
-        // Auto-detect macro chart (daily, weekly, monthly, yearly bars)
-        double TotalChartDaysDyn = 0.0;
-        const int LastBar = sc.ArraySize - 1;
-        if (LastBar > 0)
-            TotalChartDaysDyn = sc.BaseDateTimeIn[LastBar].GetAsDouble() - sc.BaseDateTimeIn[0].GetAsDouble();
-        double AvgDaysPerBarDyn = (LastBar > 0) ? (TotalChartDaysDyn / LastBar) : 0.0;
-        const bool IsMacroChartDyn = (sc.SecondsPerBar >= 86400 || AvgDaysPerBarDyn >= 0.70 || sc.ArraySize < 60 || (TotalChartDaysDyn > 25.0 && sc.ArraySize < 250));
-
-        int StartCalcBar = 0;
+        int calcStart = 0;
         if (sc.UpdateStartIndex == 0)
         {
-            StartCalcBar = SJ_Max(0, sc.ArraySize - MaxHistBars);
-            for (int t = 0; t < 5; ++t)
+            calcStart = sjMax(0, sc.ArraySize - maxHist);
+            for (int i = 0; i < calcStart; ++i)
             {
-                for (int i = 0; i < StartCalcBar; ++i)
+                for (int t = 0; t < 5; ++t)
                 {
                     sc.Subgraph[t][i] = 0.0f;
-                    sc.Subgraph[5 + t][i] = 0.0f;
+                    sc.Subgraph[5+t][i] = 0.0f;
                 }
+                Sub_Bandwidth[i] = 0.0f;
             }
-            for (int i = 0; i < StartCalcBar; ++i)
-                Sub_DynamicBandwidth[i] = 0.0f;
         }
         else
         {
-            StartCalcBar = SJ_Max(0, sc.UpdateStartIndex);
+            calcStart = sjMax(0, sc.UpdateStartIndex);
         }
 
-        std::vector<double> DynPrices;
-        std::vector<double> DynWeights;
-        std::vector<double> DynGridX;
-        std::vector<double> DynDensity;
-
-        for (int BarIdx = StartCalcBar; BarIdx < sc.ArraySize; ++BarIdx)
+        for (int bar = calcStart; bar < sc.ArraySize; ++bar)
         {
             int sIdx = 0;
-            const int eIdx = BarIdx;
 
-            if (DynMode == 0) // Rolling Window
+            if (dynMode == 0) // Rolling Window
             {
-                sIdx = SJ_Max(0, BarIdx - WindowBars + 1);
+                sIdx = sjMax(0, bar - windowBars + 1);
             }
-            else if (DynMode == 1) // Session Developing
+            else if (dynMode == 1) // Session Developing
             {
-                if (IsMacroChartDyn)
+                if (isMacro)
                 {
-                    // On macro charts (daily/weekly/monthly/yearly bars), each bar is its own session.
-                    // Fall back to Entire Chart Developing so levels accumulate properly.
-                    sIdx = 0;
+                    sIdx = 0; // macro: accumulate entire chart
                 }
                 else
                 {
-                    const int BarDay = sc.GetTradingDayDate(sc.BaseDateTimeIn[BarIdx]);
-                    sIdx = BarIdx;
-                    while (sIdx > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[sIdx - 1]) == BarDay)
-                    {
+                    const int day = sc.GetTradingDayDate(sc.BaseDateTimeIn[bar]);
+                    sIdx = bar;
+                    while (sIdx > 0 &&
+                           sc.GetTradingDayDate(sc.BaseDateTimeIn[sIdx - 1]) == day)
                         --sIdx;
-                    }
                 }
             }
-            else if (DynMode == 2) // Entire Chart Developing
-            {
-                sIdx = 0;
-            }
+            // dynMode == 2: sIdx stays 0 (entire chart developing)
 
-            s_DynamicKDEOutput out = ComputeDynamicKDE(
-                sc, sIdx, eIdx, BwMultiplier,
-                MaxTracks,
-                DynPrices, DynWeights, DynGridX, DynDensity
-            );
+            s_DynOutput out = ComputeDynamic(sc, sIdx, bar, bwMult, maxTracks);
 
             for (int t = 0; t < 5; ++t)
             {
-                sc.Subgraph[t][BarIdx] = (t < MaxTracks) ? out.HVN[t] : 0.0f;
-                sc.Subgraph[5 + t][BarIdx] = (t < MaxTracks) ? out.LVN[t] : 0.0f;
+                sc.Subgraph[t][bar]   = (t < maxTracks) ? out.HVN[t] : 0.0f;
+                sc.Subgraph[5+t][bar] = (t < maxTracks) ? out.LVN[t] : 0.0f;
             }
-            Sub_DynamicBandwidth[BarIdx] = out.Bandwidth;
+            Sub_Bandwidth[bar] = out.Bandwidth;
         }
     }
     else if (sc.UpdateStartIndex == 0)
     {
-        for (int t = 0; t < 5; ++t)
+        for (int i = 0; i < sc.ArraySize; ++i)
         {
-            for (int i = 0; i < sc.ArraySize; ++i)
+            for (int t = 0; t < 5; ++t)
             {
                 sc.Subgraph[t][i] = 0.0f;
-                sc.Subgraph[5 + t][i] = 0.0f;
+                sc.Subgraph[5+t][i] = 0.0f;
             }
+            Sub_Bandwidth[i] = 0.0f;
         }
-        for (int i = 0; i < sc.ArraySize; ++i)
-            Sub_DynamicBandwidth[i] = 0.0f;
     }
 
-    // If static levels & right-margin profile are disabled, clean up any previous lines and finish
+    // -----------------------------------------------------------------
+    // B. STATIC PROFILE + LEVELS (horizontal lines + KDE drawing)
+    // -----------------------------------------------------------------
     if (!In_DrawStaticLevels.GetYesNo())
     {
-        for (int i = 0; i < r_LastDrawnCount && i < MaxAllowedDrawnLines; ++i)
-        {
-            sc.DeleteACSChartDrawing(sc.ChartNumber, TOOL_DELETE_CHARTDRAWING, BaseLineNumber + i);
-        }
+        for (int i = 0; i < r_LastDrawnCount && i < MaxDrawn; ++i)
+            sc.DeleteACSChartDrawing(sc.ChartNumber, TOOL_DELETE_CHARTDRAWING, BaseLine + i);
         r_LastDrawnCount = 0;
         return;
     }
 
-    // -------------------------------------------------------------------------
-    // 1. Determine Bar Range & Aggregate Volume (Static Profile)
-    // -------------------------------------------------------------------------
-    int StartBarIndex = 0;
-    const int EndBarIndex = sc.ArraySize - 1;
-    int EffectiveEndBarIndex = EndBarIndex;
-    const int Scope = In_ProfileScope.GetIndex();
+    // B1. Select bar range
+    int startBar = 0, endBar = sc.ArraySize - 1;
+    SelectBarRange(sc, In_ProfileScope.GetIndex(), In_NumBars.GetInt(),
+                   isMacro, startBar, endBar);
 
-    std::map<int, double> VolumeAtTick;
-    double TotalVolume = 0.0;
-
-    auto AggregateRange = [&](int sIdx, int eIdx) {
-        VolumeAtTick.clear();
-        TotalVolume = 0.0;
-        for (int BarIdx = sIdx; BarIdx <= eIdx; ++BarIdx)
-        {
-            const int VAPSize = sc.VolumeAtPriceForBars->GetSizeAtBarIndex(BarIdx);
-            for (int VAPIdx = 0; VAPIdx < VAPSize; ++VAPIdx)
-            {
-                const s_VolumeAtPriceV2* p_VAP = nullptr;
-                if (!sc.VolumeAtPriceForBars->GetVAPElementAtIndex(BarIdx, VAPIdx, &p_VAP) || p_VAP == nullptr)
-                    break;
-
-                if (p_VAP->Volume > 0)
-                {
-                    VolumeAtTick[p_VAP->PriceInTicks] += static_cast<double>(p_VAP->Volume);
-                    TotalVolume += static_cast<double>(p_VAP->Volume);
-                }
-            }
-        }
-    };
-
-    // Auto-detect Macro chart timeframe (Daily, Weekly, Monthly, Quarterly, Yearly, or multi-day volume bars)
-    double TotalChartDays = 0.0;
-    if (EndBarIndex > 0)
+    // Thin-session fallback: if scope=CurrentSession and < 5 ticks, expand to prior session
+    s_Histogram hist = CollectHistogram(sc, startBar, endBar);
+    if (In_ProfileScope.GetIndex() == 0 && hist.TickVolume.size() < 5 && startBar > 0)
     {
-        TotalChartDays = sc.BaseDateTimeIn[EndBarIndex].GetAsDouble() - sc.BaseDateTimeIn[0].GetAsDouble();
-    }
-    double AvgDaysPerBar = (EndBarIndex > 0) ? (TotalChartDays / EndBarIndex) : 0.0;
-
-    const bool IsMacroChart = (sc.SecondsPerBar >= 86400 || AvgDaysPerBar >= 0.70 || sc.ArraySize < 60 || (TotalChartDays > 25.0 && sc.ArraySize < 250));
-
-    if (Scope == 0) // Current Session / Day (Trading Day aware)
-    {
-        if (IsMacroChart)
-        {
-            // On macro charts, automatically aggregate the entire chart so levels appear immediately
-            StartBarIndex = 0;
-            AggregateRange(StartBarIndex, EndBarIndex);
-        }
-        else
-        {
-            const int CurrentTradingDay = sc.GetTradingDayDate(sc.BaseDateTimeIn[EndBarIndex]);
-            StartBarIndex = EndBarIndex;
-            while (StartBarIndex > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[StartBarIndex - 1]) == CurrentTradingDay)
-            {
-                --StartBarIndex;
-            }
-
-            AggregateRange(StartBarIndex, EndBarIndex);
-
-            // If the developing session has insufficient price levels (< 5 ticks, e.g. right after 5 PM rollover),
-            // automatically expand back to include the prior trading session so levels remain active on chart.
-            if (VolumeAtTick.size() < 5 && StartBarIndex > 0)
-            {
-                const int PriorTradingDay = sc.GetTradingDayDate(sc.BaseDateTimeIn[StartBarIndex - 1]);
-                int ExpandedStart = StartBarIndex - 1;
-                while (ExpandedStart > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[ExpandedStart - 1]) == PriorTradingDay)
-                {
-                    --ExpandedStart;
-                }
-                StartBarIndex = ExpandedStart;
-                AggregateRange(StartBarIndex, EndBarIndex);
-            }
-        }
-    }
-    else if (Scope == 1) // Number of Bars Back
-    {
-        StartBarIndex = SJ_Max(0, EndBarIndex - In_NumBars.GetInt() + 1);
-        AggregateRange(StartBarIndex, EndBarIndex);
-    }
-    else if (Scope == 2) // Entire Chart
-    {
-        StartBarIndex = 0;
-        AggregateRange(StartBarIndex, EndBarIndex);
-    }
-    else if (Scope == 3) // Prior Completed Session
-    {
-        const int CurrentTradingDay = sc.GetTradingDayDate(sc.BaseDateTimeIn[EndBarIndex]);
-        int PriorEnd = EndBarIndex;
-        while (PriorEnd >= 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[PriorEnd]) == CurrentTradingDay)
-        {
-            --PriorEnd;
-        }
-        if (PriorEnd >= 0)
-        {
-            EffectiveEndBarIndex = PriorEnd;
-            const int PriorTradingDay = sc.GetTradingDayDate(sc.BaseDateTimeIn[PriorEnd]);
-            StartBarIndex = PriorEnd;
-            while (StartBarIndex > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[StartBarIndex - 1]) == PriorTradingDay)
-            {
-                --StartBarIndex;
-            }
-            AggregateRange(StartBarIndex, EffectiveEndBarIndex);
-        }
-        else
-        {
-            StartBarIndex = 0;
-            AggregateRange(StartBarIndex, EndBarIndex);
-        }
+        const int priorDay = sc.GetTradingDayDate(sc.BaseDateTimeIn[startBar - 1]);
+        int expanded = startBar - 1;
+        while (expanded > 0 &&
+               sc.GetTradingDayDate(sc.BaseDateTimeIn[expanded - 1]) == priorDay)
+            --expanded;
+        startBar = expanded;
+        hist = CollectHistogram(sc, startBar, endBar);
     }
 
-    if (VolumeAtTick.size() < 5 || TotalVolume <= 0.0)
+    if (hist.TickVolume.size() < 5 || hist.TotalVolume <= 0.0)
     {
         SCString msg;
-        msg.Format("Sheather-Jones Volume Profile: Insufficient volume data to compute profile (unique price ticks: %d, total volume: %.0f).", static_cast<int>(VolumeAtTick.size()), TotalVolume);
+        msg.Format("SJ: Insufficient data (ticks=%d, volume=%.0f)",
+                   static_cast<int>(hist.TickVolume.size()), hist.TotalVolume);
         sc.AddMessageToLog(msg, 0);
         return;
     }
 
-    // -------------------------------------------------------------------------
-    // 2. Statistical Metrics & Scale Parameter
-    // -------------------------------------------------------------------------
-    const int M = static_cast<int>(VolumeAtTick.size());
-    std::vector<double> Prices(M);
-    std::vector<double> Weights(M);
+    // B2. Compute bandwidth
+    s_SJResult sj = ComputeSJBandwidth(hist, static_cast<double>(sc.TickSize));
 
-    double WeightedMean = 0.0;
-    int idx = 0;
-    for (auto it = VolumeAtTick.begin(); it != VolumeAtTick.end(); ++it, ++idx)
+    double h_final;
+    const int bwMode = In_BandwidthMode.GetIndex();
+    if (bwMode == 1) // Fixed Points
+        h_final = static_cast<double>(In_FixedBandwidthPts.GetFloat());
+    else
+        h_final = sj.Bandwidth;
+
+    h_final *= bwMult;
+    h_final = sjMax(h_final, static_cast<double>(sc.TickSize));
+
+    // B3. KDE + peak detection
+    s_KDEResult kde = EvaluateKDE(sj.Prices, sj.Weights, h_final,
+                                  static_cast<double>(sc.TickSize),
+                                  In_MinProminencePct.GetFloat());
+
+    if (kde.MaxDensity <= 0.0f) return;
+
+    const int numHVN = sjMin(In_MaxHVNCount.GetInt(), static_cast<int>(kde.HVNs.size()));
+    const int numLVN = sjMin(In_MaxLVNCount.GetInt(), static_cast<int>(kde.LVNs.size()));
+
+    // Diagnostic
+    SCString diag;
+    diag.Format("SJ: N=%.0f M=%d h=%.4f HVNs=%d LVNs=%d bars=[%d..%d]",
+                sj.N, static_cast<int>(sj.Prices.size()), h_final,
+                numHVN, numLVN, startBar, endBar);
+    sc.AddMessageToLog(diag, 0);
+
+    // -----------------------------------------------------------------
+    // B4. DRAWING — chart-type-aware time projection
+    // -----------------------------------------------------------------
+    int lineIdx = 0;
+
+    // Time scaling
+    int firstVis = sjClamp(sc.IndexOfFirstVisibleBar, 0, sc.ArraySize - 1);
+    int lastVis  = sjClamp(sc.IndexOfLastVisibleBar, 0, sc.ArraySize - 1);
+    if (lastVis <= firstVis)
     {
-        Prices[idx] = it->first * static_cast<double>(sc.TickSize);
-        Weights[idx] = it->second / TotalVolume;
-        WeightedMean += Weights[idx] * Prices[idx];
+        firstVis = sjMax(0, sc.ArraySize - 80);
+        lastVis  = sc.ArraySize - 1;
     }
+    int numVis = sjMax(1, lastVis - firstVis);
+    double visSpan = sc.BaseDateTimeIn[lastVis].GetAsDouble()
+                   - sc.BaseDateTimeIn[firstVis].GetAsDouble();
+    double daysPerBar = (visSpan > 1e-7) ? (visSpan / numVis) : (1.0 / 1440.0);
+    if (daysPerBar <= 1e-7)
+        daysPerBar = (sc.SecondsPerBar > 0) ? (sc.SecondsPerBar / 86400.0) : (1.0/1440.0);
 
-    // Weighted variance & std dev
-    double WeightedVar = 0.0;
-    double SumSqWeights = 0.0;
-    for (int i = 0; i < M; ++i)
-    {
-        double diff = Prices[i] - WeightedMean;
-        WeightedVar += Weights[i] * diff * diff;
-        SumSqWeights += Weights[i] * Weights[i];
-    }
-    double Sigma = sqrt(SJ_Max(WeightedVar, 1e-6));
-
-    // Kish's Effective Sample Size for volume-weighted data
-    // In Sheather-Jones AMISE theory, N represents the effective number of observations.
-    // For Volume Profile, volume represents aggregate trade executions.
-    // We scale Kish's diversity metric so N reflects the true statistical information scale
-    // of the volume distribution (N in [2000, 8000]), allowing pure SJ to resolve all specific peaks
-    // without over-smoothing them into a single lump.
-    double n_eff = (SumSqWeights > 1e-12) ? (1.0 / SumSqWeights) : static_cast<double>(M);
-    n_eff = SJ_Clamp(n_eff * 50.0, 2000.0, 8000.0);
-
-    // Weighted IQR for robust scale estimation across long-horizon / macro charts
-    double CumWeight = 0.0;
-    double Q25 = Prices.front();
-    double Q75 = Prices.back();
-    bool FoundQ25 = false;
-    for (int i = 0; i < M; ++i)
-    {
-        CumWeight += Weights[i];
-        if (!FoundQ25 && CumWeight >= 0.25)
-        {
-            Q25 = Prices[i];
-            FoundQ25 = true;
-        }
-        if (CumWeight >= 0.75)
-        {
-            Q75 = Prices[i];
-            break;
-        }
-    }
-    double IQR = Q75 - Q25;
-    double ScaleParam = (IQR > 0.0) ? SJ_Min(Sigma, IQR / 1.349) : Sigma;
-    if (ScaleParam <= 0.0)
-        ScaleParam = Sigma;
-
-    // -------------------------------------------------------------------------
-    // 3. Sheather-Jones 1D Bandwidth Calculation
-    // -------------------------------------------------------------------------
-    double h_0 = pow(4.0 / (3.0 * n_eff), 0.2) * ScaleParam;
-    h_0 = SJ_Max(h_0, static_cast<double>(sc.TickSize));
-
-    // Sheather-Jones 1D Roughness: S = sum_i sum_j w_i w_j W(r^2) P(r^2)
-    double S = 0.0;
-    const double h_0_sq = h_0 * h_0;
-    const double Cutoff_r_sq = 36.0;
-
-    for (int i = 0; i < M; ++i)
-    {
-        S += Weights[i] * Weights[i] * 0.75;
-        for (int j = i + 1; j < M; ++j)
-        {
-            double diff = Prices[i] - Prices[j];
-            double r_sq = (diff * diff) / h_0_sq;
-            if (r_sq > Cutoff_r_sq)
-                break;
-
-            double P = (r_sq * r_sq) / 16.0 - (3.0 * r_sq) / 4.0 + 0.75;
-            double W = exp(-r_sq / 4.0);
-            double term = 2.0 * Weights[i] * Weights[j] * W * P;
-            S += term;
-        }
-    }
-
-    double Roughness = S / (sqrt(4.0 * SJ_PI) * pow(h_0, 5.0));
-
-    // Optimal bandwidth h_Target
-    const double R_K = 1.0 / (2.0 * sqrt(SJ_PI));
-    const double MinPrice = Prices.front();
-    const double MaxPrice = Prices.back();
-    const double PriceRange = SJ_Max(1.0, MaxPrice - MinPrice);
-
-    const int BwMode = SJ_Clamp(static_cast<int>(In_BandwidthMode.GetIndex()), 0, 2);
-    double h_Target = h_0;
-
-    if (BwMode == 2) // Fixed Points
-    {
-        h_Target = static_cast<double>(In_FixedBandwidthPoints.GetFloat());
-    }
-    else // Both Mode 0 (Pure Sheather-Jones) and Mode 1 (SJ Exact) use the same pure SJ formula
-    {
-        if (Roughness > 1e-12)
-            h_Target = pow(R_K / (n_eff * Roughness), 0.2);
-        else
-            h_Target = h_0;
-    }
-
-    // Apply user-defined Bandwidth Multiplier (<1.0 sharper, >1.0 smoother)
-    const float BwMult = SJ_Clamp(In_BandwidthMultiplier.GetFloat(), 0.1f, 5.0f);
-    double h_SJ = h_Target * static_cast<double>(BwMult);
-
-    // Only safe guard: bandwidth cannot be sub-tick
-    h_SJ = SJ_Max(h_SJ, static_cast<double>(sc.TickSize));
-
-    // --- Diagnostic logging ---
-    SCString DiagMsg;
-    DiagMsg.Format("SJ Diag: M=%d n_eff=%.1f Sigma=%.2f IQR=%.2f ScaleParam=%.2f h_0=%.3f "
-                   "Roughness=%.6f h_raw=%.3f h_final=%.3f PriceRange=%.1f BwMode=%d BwMult=%.2f",
-                   M, n_eff, Sigma, IQR, ScaleParam, h_0,
-                   Roughness, h_Target, h_SJ, PriceRange, BwMode, static_cast<double>(BwMult));
-    sc.AddMessageToLog(DiagMsg, 0);
-
-    // -------------------------------------------------------------------------
-    // 4. Evaluate KDE along a Dynamic Price Grid
-    // -------------------------------------------------------------------------
-    const int TargetGridPoints = 1500;
-    double GridStep = (MaxPrice - MinPrice) / static_cast<double>(TargetGridPoints - 1);
-    GridStep = SJ_Min(GridStep, h_SJ / 2.5);
-    GridStep = SJ_Max(GridStep, static_cast<double>(sc.TickSize));
-    const int NumGridPoints = SJ_Clamp(static_cast<int>((MaxPrice - MinPrice) / GridStep) + 1, 20, 2000);
-
-    std::vector<float> GridPrices(NumGridPoints);
-    std::vector<float> GridDensity(NumGridPoints, 0.0f);
-    const double two_h_sq = 2.0 * h_SJ * h_SJ;
-    const double norm_factor = 1.0 / (sqrt(2.0 * SJ_PI) * h_SJ);
-
-    float MaxDensity = 0.0f;
-
-    for (int k = 0; k < NumGridPoints; ++k)
-    {
-        double x_k = MinPrice + k * GridStep;
-        GridPrices[k] = static_cast<float>(x_k);
-
-        double density_k = 0.0;
-        double min_p = x_k - 4.0 * h_SJ;
-        double max_p = x_k + 4.0 * h_SJ;
-
-        auto it_start = std::lower_bound(Prices.begin(), Prices.end(), min_p);
-        int start_i = static_cast<int>(std::distance(Prices.begin(), it_start));
-
-        for (int i = start_i; i < M; ++i)
-        {
-            if (Prices[i] > max_p)
-                break;
-
-            double diff = x_k - Prices[i];
-            density_k += Weights[i] * exp(-(diff * diff) / two_h_sq);
-        }
-        density_k *= norm_factor;
-        GridDensity[k] = static_cast<float>(density_k);
-
-        if (GridDensity[k] > MaxDensity)
-            MaxDensity = GridDensity[k];
-    }
-
-    if (MaxDensity <= 0.0f)
-        return;
-
-    // -------------------------------------------------------------------------
-    // 5. Detect Peaks (HVNs) and Valleys (LVNs) with True Topographic Prominence
-    // -------------------------------------------------------------------------
-    struct s_PeakCandidate
-    {
-        int GridIdx;
-        float Price;
-        float Density;
-    };
-
-    std::vector<s_PeakCandidate> CandidatePeaks;
-
-    // Minimum distance between distinct peaks to prevent sub-tick noise ripples
-    const int MinPeakDistSteps = SJ_Max(2, static_cast<int>(round((h_SJ * 0.70) / GridStep)));
-
-    for (int k = 1; k < NumGridPoints - 1; ++k)
-    {
-        if (GridDensity[k] >= GridDensity[k - 1] && GridDensity[k] > GridDensity[k + 1])
-        {
-            s_PeakCandidate cand;
-            cand.GridIdx = k;
-            cand.Price = GridPrices[k];
-            cand.Density = GridDensity[k];
-            CandidatePeaks.push_back(cand);
-        }
-    }
-
-    // Filter candidate peaks: suppress micro-ripples within MinPeakDistSteps of a higher neighbor
-    std::vector<s_PeakCandidate> FilteredPeaks;
-    for (size_t i = 0; i < CandidatePeaks.size(); ++i)
-    {
-        bool is_dominant = true;
-        for (size_t j = 0; j < CandidatePeaks.size(); ++j)
-        {
-            if (i == j)
-                continue;
-
-            int dist = std::abs(CandidatePeaks[i].GridIdx - CandidatePeaks[j].GridIdx);
-            if (dist <= MinPeakDistSteps)
-            {
-                if (CandidatePeaks[j].Density > CandidatePeaks[i].Density)
-                {
-                    is_dominant = false;
-                    break;
-                }
-                else if (CandidatePeaks[j].Density == CandidatePeaks[i].Density && j < i)
-                {
-                    is_dominant = false;
-                    break;
-                }
-            }
-        }
-        if (is_dominant)
-        {
-            FilteredPeaks.push_back(CandidatePeaks[i]);
-        }
-    }
-
-    // Compute True Topographic Prominence for each filtered peak
-    // Prominence = Height - KeyCol (highest saddle point connecting to higher ground)
-    const float MinProminenceThreshold = (In_MinProminencePct.GetFloat() / 100.0f) * MaxDensity;
-    std::vector<s_SJLevel> DetectedHVNs;
-
-    for (size_t p = 0; p < FilteredPeaks.size(); ++p)
-    {
-        const int k = FilteredPeaks[p].GridIdx;
-        const float peak_density = FilteredPeaks[p].Density;
-
-        // Search left: find minimum density before encountering a point higher than this peak
-        float left_min = peak_density;
-        for (int l = k - 1; l >= 0; --l)
-        {
-            if (GridDensity[l] > peak_density)
-                break;
-            if (GridDensity[l] < left_min)
-                left_min = GridDensity[l];
-        }
-
-        // Search right: find minimum density before encountering a point higher than this peak
-        float right_min = peak_density;
-        for (int r = k + 1; r < NumGridPoints; ++r)
-        {
-            if (GridDensity[r] > peak_density)
-                break;
-            if (GridDensity[r] < right_min)
-                right_min = GridDensity[r];
-        }
-
-        // Col is the highest of the two flanking saddle points
-        float key_col = SJ_Max(left_min, right_min);
-        float raw_prominence = peak_density - key_col;
-        float rel_prominence = SJ_Clamp(raw_prominence / MaxDensity, 0.0f, 1.0f);
-
-        // Also check prominence relative to adjacent peaks in FilteredPeaks
-        float adj_prominence = raw_prominence;
-        if (FilteredPeaks.size() > 1)
-        {
-            float valley_min = peak_density;
-            if (p > 0)
-            {
-                int prev_k = FilteredPeaks[p - 1].GridIdx;
-                for (int m = prev_k; m <= k; ++m)
-                {
-                    if (GridDensity[m] < valley_min)
-                        valley_min = GridDensity[m];
-                }
-            }
-            if (p + 1 < FilteredPeaks.size())
-            {
-                int next_k = FilteredPeaks[p + 1].GridIdx;
-                for (int m = k; m <= next_k; ++m)
-                {
-                    if (GridDensity[m] < valley_min)
-                        valley_min = GridDensity[m];
-                }
-            }
-            adj_prominence = SJ_Max(raw_prominence, peak_density - valley_min);
-        }
-
-        float effective_prominence = SJ_Max(raw_prominence, adj_prominence);
-        float effective_ratio = SJ_Clamp(effective_prominence / MaxDensity, 0.0f, 1.0f);
-
-        if (effective_prominence >= MinProminenceThreshold || 
-            (peak_density >= 0.30f * MaxDensity && effective_ratio >= 0.015f))
-        {
-            s_SJLevel lvl;
-            lvl.Price = FilteredPeaks[p].Price;
-            lvl.Density = peak_density;
-            lvl.Prominence = SJ_Max(effective_ratio, peak_density / MaxDensity * 0.35f);
-            lvl.Prominence = SJ_Clamp(lvl.Prominence, 0.05f, 1.0f);
-            lvl.IsHVN = true;
-            DetectedHVNs.push_back(lvl);
-        }
-    }
-
-    // Detect LVNs (Valleys) between adjacent detected HVNs
-    std::vector<s_SJLevel> DetectedLVNs;
-    std::vector<s_SJLevel> HVNsByPrice = DetectedHVNs;
-    std::sort(HVNsByPrice.begin(), HVNsByPrice.end(), [](const s_SJLevel& a, const s_SJLevel& b) {
-        return a.Price < b.Price;
-    });
-
-    for (size_t i = 0; i + 1 < HVNsByPrice.size(); ++i)
-    {
-        float pA = HVNsByPrice[i].Price;
-        float pB = HVNsByPrice[i + 1].Price;
-        
-        int idxA = SJ_Clamp(static_cast<int>(round((pA - MinPrice) / GridStep)), 0, NumGridPoints - 1);
-        int idxB = SJ_Clamp(static_cast<int>(round((pB - MinPrice) / GridStep)), 0, NumGridPoints - 1);
-        if (idxA > idxB) std::swap(idxA, idxB);
-
-        int min_idx = idxA;
-        float min_density = GridDensity[idxA];
-
-        for (int m = idxA + 1; m < idxB; ++m)
-        {
-            if (GridDensity[m] < min_density)
-            {
-                min_density = GridDensity[m];
-                min_idx = m;
-            }
-        }
-
-        float flanking_min = SJ_Min(HVNsByPrice[i].Density, HVNsByPrice[i + 1].Density);
-        float vacuum_depth = flanking_min - min_density;
-
-        if (vacuum_depth > 0.0f && min_idx > idxA && min_idx < idxB)
-        {
-            s_SJLevel lvn;
-            lvn.Price = GridPrices[min_idx];
-            lvn.Density = min_density;
-            lvn.Prominence = SJ_Clamp(vacuum_depth / MaxDensity, 0.05f, 1.0f);
-            lvn.IsHVN = false;
-            DetectedLVNs.push_back(lvn);
-        }
-    }
-
-    // Sort HVNs by prominence descending
-    std::sort(DetectedHVNs.begin(), DetectedHVNs.end(), [](const s_SJLevel& a, const s_SJLevel& b) {
-        return a.Prominence > b.Prominence;
-    });
-
-    // Sort LVNs by depth descending
-    std::sort(DetectedLVNs.begin(), DetectedLVNs.end(), [](const s_SJLevel& a, const s_SJLevel& b) {
-        return a.Prominence > b.Prominence;
-    });
-
-    // -------------------------------------------------------------------------
-    // 6. Draw Levels and KDE Profile using sc.UseTool
-    // -------------------------------------------------------------------------
-    int LineIdx = 0;
-    const int TargetHVNCount = SJ_Min(In_MaxHVNCount.GetInt(), static_cast<int>(DetectedHVNs.size()));
-    const int TargetLVNCount = SJ_Min(In_MaxLVNCount.GetInt(), static_cast<int>(DetectedLVNs.size()));
-    const DrawingTypeEnum SelectedDrawingType = (In_LineType.GetIndex() == 0) ? DRAWING_HORIZONTALLINE : DRAWING_RAY;
-    const int GradientMode = SJ_Clamp(static_cast<int>(In_ColorGradientMode.GetIndex()), 0, 2);
-    const bool UseTransparency = In_EnableTransparency.GetYesNo() != 0;
-
-    SCString calcMsg;
-    calcMsg.Format("SJ Volume Profile: Bandwidth h=%.2f. Detected %d HVNs and %d LVNs across bars [%d..%d].",
-                   h_SJ, TargetHVNCount, TargetLVNCount, StartBarIndex, EffectiveEndBarIndex);
-    sc.AddMessageToLog(calcMsg, 0);
-
-    // Determine screen-accurate time scaling for drawings
-    int FirstVis = SJ_Clamp(sc.IndexOfFirstVisibleBar, 0, sc.ArraySize - 1);
-    int LastVis  = SJ_Clamp(sc.IndexOfLastVisibleBar, 0, sc.ArraySize - 1);
-    if (LastVis <= FirstVis)
-    {
-        FirstVis = SJ_Max(0, sc.ArraySize - 80);
-        LastVis  = sc.ArraySize - 1;
-    }
-
-    int NumVisBars = SJ_Max(1, LastVis - FirstVis);
-    double VisTimeSpan = sc.BaseDateTimeIn[LastVis].GetAsDouble() - sc.BaseDateTimeIn[FirstVis].GetAsDouble();
-    
-    // Time per visible bar on the user's active screen (in SCDateTime double units / days)
-    double DaysPerBar = (VisTimeSpan > 1e-7) ? (VisTimeSpan / NumVisBars) : (1.0 / 1440.0);
-    
-    if (DaysPerBar <= 1e-7)
-    {
-        if (sc.SecondsPerBar > 0)
-            DaysPerBar = sc.SecondsPerBar / 86400.0;
-        else
-            DaysPerBar = 1.0 / 1440.0; // 1 minute
-    }
-
-    // Determine proportional profile display width
-    // Capped at 35% of visible chart bars so it never stretches across or off the screen on macro charts
-    int UserWidthBars = SJ_Clamp(In_KDEProfileWidthBars.GetInt(), 5, 250);
-    double MaxAllowedBars = SJ_Max(4.0, NumVisBars * 0.35);
-    double EffectiveWidthBars = SJ_Min(static_cast<double>(UserWidthBars), MaxAllowedBars);
-
-    // Margin offset in bars
-    int MarginOffsetBars = SJ_Clamp(In_KDERightOffsetBars.GetInt(), 0, 100);
-
-    // Time per bar for forward projection:
-    // In Sierra Chart, volume/range charts (SecondsPerBar == 0) use session steps in forward space.
-    // Ensure forward projection uses at least 15 minutes (0.0104 days) per bar so the profile
-    // spans real visual columns across forward space without collapsing in session breaks.
-    double ForwardDaysPerBar = DaysPerBar;
+    // Forward projection: volume/range charts need a floor
+    double fwdDaysPerBar = daysPerBar;
     if (sc.SecondsPerBar == 0)
-    {
-        ForwardDaysPerBar = SJ_Max(ForwardDaysPerBar, 15.0 / 1440.0);
-    }
+        fwdDaysPerBar = sjMax(fwdDaysPerBar, 15.0 / 1440.0);
 
-    auto GetOffsetDateTime = [&](const SCDateTime& anchor, double barOffset) -> SCDateTime {
-        SCDateTime dt = anchor;
-        double step = (barOffset >= 0.0) ? ForwardDaysPerBar : DaysPerBar;
-        double addDays = barOffset * step;
-        return SCDateTime(dt.GetAsDouble() + addDays);
+    auto OffsetDT = [&](const SCDateTime& anchor, double barOff) -> SCDateTime {
+        double step = (barOff >= 0.0) ? fwdDaysPerBar : daysPerBar;
+        return SCDateTime(anchor.GetAsDouble() + barOff * step);
     };
 
-    // Draw KDE Density Profile (Envelope Curve and/or Filled Bars)
-    if (In_PlotKDEProfile.GetYesNo() != 0 && MaxDensity > 0.0f)
+    // KDE profile width capped at 35% of visible bars
+    int userWidth   = sjClamp(In_KDEWidthBars.GetInt(), 5, 250);
+    double maxWidth = sjMax(4.0, numVis * 0.35);
+    double effWidth = sjMin(static_cast<double>(userWidth), maxWidth);
+    int marginOff   = sjClamp(In_KDERightOffset.GetInt(), 0, 100);
+
+    auto KDECoords = [&](float ratio, const SCDateTime& lastDT,
+                         SCDateTime& baseDT, SCDateTime& tipDT)
     {
-        const int Style = SJ_Clamp(In_KDEProfileStyle.GetIndex(), 0, 2);
-        const int Placement = SJ_Clamp(In_KDEProfilePlacement.GetIndex(), 0, 2);
-        const COLORREF KDEColor = In_KDEProfileColor.GetColor();
-        const int KDETrans = SJ_Clamp(In_KDEProfileTransparency.GetInt(), 0, 95);
-        const int KDELineW = SJ_Clamp(In_KDELineWidth.GetInt(), 1, 10);
-        const SCDateTime LastBarDT = sc.BaseDateTimeIn[EffectiveEndBarIndex];
-
-        auto GetKDECoordinates = [&](float ratio, SCDateTime& r_BaseDT, SCDateTime& r_TipDT) {
-            if (Placement == 0) // Right Margin (Right of Price Bars)
-            {
-                r_BaseDT = GetOffsetDateTime(LastBarDT, MarginOffsetBars);
-                r_TipDT  = GetOffsetDateTime(LastBarDT, MarginOffsetBars + ratio * EffectiveWidthBars);
-            }
-            else if (Placement == 1) // Right Edge (Aligned with Native VP)
-            {
-                r_BaseDT = GetOffsetDateTime(LastBarDT, MarginOffsetBars + EffectiveWidthBars);
-                r_TipDT  = GetOffsetDateTime(LastBarDT, MarginOffsetBars + EffectiveWidthBars - ratio * EffectiveWidthBars);
-            }
-            else // Over Price Action (Leftward from Last Bar)
-            {
-                r_BaseDT = LastBarDT;
-                r_TipDT  = GetOffsetDateTime(LastBarDT, -ratio * EffectiveWidthBars);
-            }
-        };
-
-        // Draw Smooth Envelope Curve (High resolution along grid points — no sub-sampling)
-        if (Style == 0 || Style == 2)
+        int placement = sjClamp(In_KDEPlacement.GetIndex(), 0, 2);
+        if (placement == 0) // Right Margin
         {
-            const int NumCurveSegments = SJ_Min(180, NumGridPoints);
-            SCDateTime prev_tip_dt;
-            float prev_price = 0.0f;
-            bool has_prev = false;
-            SCDateTime first_base_dt, first_tip_dt, last_base_dt, last_tip_dt;
-            float first_price = 0.0f, last_price = 0.0f;
+            baseDT = OffsetDT(lastDT, marginOff);
+            tipDT  = OffsetDT(lastDT, marginOff + ratio * effWidth);
+        }
+        else if (placement == 1) // Right Edge
+        {
+            baseDT = OffsetDT(lastDT, marginOff + effWidth);
+            tipDT  = OffsetDT(lastDT, marginOff + effWidth - ratio * effWidth);
+        }
+        else // Over Price Action
+        {
+            baseDT = lastDT;
+            tipDT  = OffsetDT(lastDT, -ratio * effWidth);
+        }
+    };
 
-            for (int s = 0; s < NumCurveSegments && LineIdx < 200; ++s)
+    // --- Draw KDE profile ---
+    if (In_PlotKDE.GetYesNo() && kde.MaxDensity > 0.0f)
+    {
+        const int style   = sjClamp(In_KDEStyle.GetIndex(), 0, 2);
+        const COLORREF kc = In_KDEColor.GetColor();
+        const int kTrans  = sjClamp(In_KDETransparency.GetInt(), 0, 95);
+        const int kLineW  = sjClamp(In_KDELineWidth.GetInt(), 1, 10);
+        const SCDateTime lastDT = sc.BaseDateTimeIn[endBar];
+        const int numGrid = static_cast<int>(kde.GridPrices.size());
+
+        // Envelope curve
+        if (style == 0 || style == 2)
+        {
+            const int segs = sjMin(180, numGrid);
+            SCDateTime prevTip;
+            float prevPrice = 0.0f;
+            bool hasPrev = false;
+            SCDateTime firstBase, firstTip, lastBase, lastTip;
+            float firstP = 0.0f, lastP = 0.0f;
+
+            for (int s = 0; s < segs && lineIdx < 200; ++s)
             {
-                int grid_idx = static_cast<int>(round(s * (NumGridPoints - 1) / static_cast<double>(NumCurveSegments - 1)));
-                grid_idx = SJ_Clamp(grid_idx, 0, NumGridPoints - 1);
+                int gi = sjClamp(static_cast<int>(round(
+                    s * (numGrid - 1) / static_cast<double>(segs - 1))), 0, numGrid - 1);
 
-                float density = GridDensity[grid_idx];
-                float ratio = SJ_Clamp(density / MaxDensity, 0.0f, 1.0f);
-                float cur_price = GridPrices[grid_idx];
+                float ratio = sjClamp(kde.GridDensity[gi] / kde.MaxDensity, 0.0f, 1.0f);
+                float price = kde.GridPrices[gi];
 
-                SCDateTime base_dt, tip_dt;
-                GetKDECoordinates(ratio, base_dt, tip_dt);
+                SCDateTime baseDT, tipDT;
+                KDECoords(ratio, lastDT, baseDT, tipDT);
 
-                if (s == 0)
+                if (s == 0) { firstBase = baseDT; firstTip = tipDT; firstP = price; }
+                lastBase = baseDT; lastTip = tipDT; lastP = price;
+
+                if (hasPrev)
                 {
-                    first_base_dt = base_dt;
-                    first_tip_dt = tip_dt;
-                    first_price = cur_price;
+                    s_UseTool T; T.Clear();
+                    T.ChartNumber = sc.ChartNumber;
+                    T.DrawingType = DRAWING_LINE;
+                    T.LineNumber  = BaseLine + lineIdx++;
+                    T.BeginDateTime = prevTip; T.BeginValue = prevPrice;
+                    T.EndDateTime   = tipDT;   T.EndValue   = price;
+                    T.Color = kc; T.TransparencyLevel = kTrans;
+                    T.LineWidth = kLineW; T.LineStyle = LINESTYLE_SOLID;
+                    T.AddMethod = UTAM_ADD_OR_ADJUST;
+                    sc.UseTool(T);
                 }
-                last_base_dt = base_dt;
-                last_tip_dt = tip_dt;
-                last_price = cur_price;
-
-                if (has_prev)
-                {
-                    s_UseTool Tool;
-                    Tool.Clear();
-                    Tool.ChartNumber = sc.ChartNumber;
-                    Tool.DrawingType = DRAWING_LINE;
-                    Tool.LineNumber = BaseLineNumber + LineIdx++;
-                    Tool.BeginDateTime = prev_tip_dt;
-                    Tool.BeginValue = prev_price;
-                    Tool.EndDateTime = tip_dt;
-                    Tool.EndValue = cur_price;
-                    Tool.Color = KDEColor;
-                    Tool.TransparencyLevel = KDETrans;
-                    Tool.LineWidth = KDELineW;
-                    Tool.LineStyle = LINESTYLE_SOLID;
-                    Tool.AddMethod = UTAM_ADD_OR_ADJUST;
-                    sc.UseTool(Tool);
-                }
-
-                prev_tip_dt = tip_dt;
-                prev_price = cur_price;
-                has_prev = true;
+                prevTip = tipDT; prevPrice = price; hasPrev = true;
             }
 
-            // Draw baseline spine and end caps to form a complete distribution envelope
-            if (has_prev && LineIdx + 3 < 150)
+            // Baseline + caps
+            if (hasPrev && lineIdx + 3 < 200)
             {
-                // Baseline spine
-                s_UseTool SpineTool;
-                SpineTool.Clear();
-                SpineTool.ChartNumber = sc.ChartNumber;
-                SpineTool.DrawingType = DRAWING_LINE;
-                SpineTool.LineNumber = BaseLineNumber + LineIdx++;
-                SpineTool.BeginDateTime = first_base_dt;
-                SpineTool.BeginValue = first_price;
-                SpineTool.EndDateTime = last_base_dt;
-                SpineTool.EndValue = last_price;
-                SpineTool.Color = KDEColor;
-                SpineTool.TransparencyLevel = SJ_Min(95, KDETrans + 15);
-                SpineTool.LineWidth = 1;
-                SpineTool.LineStyle = LINESTYLE_DASH;
-                SpineTool.AddMethod = UTAM_ADD_OR_ADJUST;
-                sc.UseTool(SpineTool);
-
+                int capTrans = sjMin(95, kTrans + 15);
+                // Spine
+                s_UseTool T; T.Clear();
+                T.ChartNumber = sc.ChartNumber; T.DrawingType = DRAWING_LINE;
+                T.LineNumber = BaseLine + lineIdx++;
+                T.BeginDateTime = firstBase; T.BeginValue = firstP;
+                T.EndDateTime   = lastBase;  T.EndValue   = lastP;
+                T.Color = kc; T.TransparencyLevel = capTrans;
+                T.LineWidth = 1; T.LineStyle = LINESTYLE_DASH;
+                T.AddMethod = UTAM_ADD_OR_ADJUST;
+                sc.UseTool(T);
                 // Bottom cap
-                s_UseTool BotCap;
-                BotCap.Clear();
-                BotCap.ChartNumber = sc.ChartNumber;
-                BotCap.DrawingType = DRAWING_LINE;
-                BotCap.LineNumber = BaseLineNumber + LineIdx++;
-                BotCap.BeginDateTime = first_base_dt;
-                BotCap.BeginValue = first_price;
-                BotCap.EndDateTime = first_tip_dt;
-                BotCap.EndValue = first_price;
-                BotCap.Color = KDEColor;
-                BotCap.TransparencyLevel = SJ_Min(95, KDETrans + 15);
-                BotCap.LineWidth = 1;
-                BotCap.LineStyle = LINESTYLE_SOLID;
-                BotCap.AddMethod = UTAM_ADD_OR_ADJUST;
-                sc.UseTool(BotCap);
-
+                T.Clear(); T.ChartNumber = sc.ChartNumber; T.DrawingType = DRAWING_LINE;
+                T.LineNumber = BaseLine + lineIdx++;
+                T.BeginDateTime = firstBase; T.BeginValue = firstP;
+                T.EndDateTime   = firstTip;  T.EndValue   = firstP;
+                T.Color = kc; T.TransparencyLevel = capTrans;
+                T.LineWidth = 1; T.LineStyle = LINESTYLE_SOLID;
+                T.AddMethod = UTAM_ADD_OR_ADJUST;
+                sc.UseTool(T);
                 // Top cap
-                s_UseTool TopCap;
-                TopCap.Clear();
-                TopCap.ChartNumber = sc.ChartNumber;
-                TopCap.DrawingType = DRAWING_LINE;
-                TopCap.LineNumber = BaseLineNumber + LineIdx++;
-                TopCap.BeginDateTime = last_base_dt;
-                TopCap.BeginValue = last_price;
-                TopCap.EndDateTime = last_tip_dt;
-                TopCap.EndValue = last_price;
-                TopCap.Color = KDEColor;
-                TopCap.TransparencyLevel = SJ_Min(95, KDETrans + 15);
-                TopCap.LineWidth = 1;
-                TopCap.LineStyle = LINESTYLE_SOLID;
-                TopCap.AddMethod = UTAM_ADD_OR_ADJUST;
-                sc.UseTool(TopCap);
+                T.Clear(); T.ChartNumber = sc.ChartNumber; T.DrawingType = DRAWING_LINE;
+                T.LineNumber = BaseLine + lineIdx++;
+                T.BeginDateTime = lastBase; T.BeginValue = lastP;
+                T.EndDateTime   = lastTip;  T.EndValue   = lastP;
+                T.Color = kc; T.TransparencyLevel = capTrans;
+                T.LineWidth = 1; T.LineStyle = LINESTYLE_SOLID;
+                T.AddMethod = UTAM_ADD_OR_ADJUST;
+                sc.UseTool(T);
             }
         }
 
-        // Draw Filled Density Bars (High resolution along price grid)
-        if (Style == 1 || Style == 2)
+        // Filled bars
+        if (style == 1 || style == 2)
         {
-            const int NumSlices = (Style == 2) ? SJ_Min(60, NumGridPoints) : SJ_Min(160, NumGridPoints);
-            for (int s = 0; s < NumSlices && LineIdx < 230; ++s)
+            const int slices = (style == 2) ? sjMin(60, numGrid) : sjMin(160, numGrid);
+            for (int s = 0; s < slices && lineIdx < 230; ++s)
             {
-                int grid_idx = static_cast<int>(round(s * (NumGridPoints - 1) / static_cast<double>(NumSlices - 1)));
-                grid_idx = SJ_Clamp(grid_idx, 0, NumGridPoints - 1);
+                int gi = sjClamp(static_cast<int>(round(
+                    s * (numGrid - 1) / static_cast<double>(slices - 1))), 0, numGrid - 1);
 
-                float density = GridDensity[grid_idx];
-                float ratio = density / MaxDensity;
-                if (ratio < 0.02f)
-                    continue;
+                float ratio = kde.GridDensity[gi] / kde.MaxDensity;
+                if (ratio < 0.02f) continue;
 
-                SCDateTime base_dt, tip_dt;
-                GetKDECoordinates(ratio, base_dt, tip_dt);
+                SCDateTime baseDT, tipDT;
+                KDECoords(ratio, lastDT, baseDT, tipDT);
+                if (baseDT > tipDT) std::swap(baseDT, tipDT);
 
-                SCDateTime bar_start = base_dt;
-                SCDateTime bar_end = tip_dt;
-                if (bar_start > bar_end)
-                    std::swap(bar_start, bar_end);
-
-                s_UseTool Tool;
-                Tool.Clear();
-                Tool.ChartNumber = sc.ChartNumber;
-                Tool.DrawingType = DRAWING_LINE;
-                Tool.LineNumber = BaseLineNumber + LineIdx++;
-                Tool.BeginDateTime = bar_start;
-                Tool.BeginValue = GridPrices[grid_idx];
-                Tool.EndDateTime = bar_end;
-                Tool.EndValue = GridPrices[grid_idx];
-                Tool.Color = KDEColor;
-                Tool.TransparencyLevel = KDETrans;
-                Tool.LineWidth = 3;
-                Tool.LineStyle = LINESTYLE_SOLID;
-                Tool.AddMethod = UTAM_ADD_OR_ADJUST;
-                sc.UseTool(Tool);
+                s_UseTool T; T.Clear();
+                T.ChartNumber = sc.ChartNumber; T.DrawingType = DRAWING_LINE;
+                T.LineNumber = BaseLine + lineIdx++;
+                T.BeginDateTime = baseDT; T.BeginValue = kde.GridPrices[gi];
+                T.EndDateTime   = tipDT;  T.EndValue   = kde.GridPrices[gi];
+                T.Color = kc; T.TransparencyLevel = kTrans;
+                T.LineWidth = 3; T.LineStyle = LINESTYLE_SOLID;
+                T.AddMethod = UTAM_ADD_OR_ADJUST;
+                sc.UseTool(T);
             }
         }
     }
 
-    const int LabelPos = SJ_Clamp(In_LevelLabelPosition.GetIndex(), 0, 2);
-    const int LabelFontSize = SJ_Clamp(In_LevelLabelFontSize.GetInt(), 6, 24);
+    // --- Draw HVN lines ---
+    const DrawingTypeEnum drawType =
+        (In_LineType.GetIndex() == 0) ? DRAWING_HORIZONTALLINE : DRAWING_RAY;
+    const int gradMode  = sjClamp(In_ColorGradientMode.GetIndex(), 0, 2);
+    const bool useTrans = In_EnableTransparency.GetYesNo() != 0;
+    const int labelPos  = sjClamp(In_LabelPosition.GetIndex(), 0, 2);
+    const int labelFont = sjClamp(In_LabelFontSize.GetInt(), 6, 24);
 
-    // Draw Top HVNs
-    for (int i = 0; i < TargetHVNCount && LineIdx < MaxAllowedDrawnLines; ++i, ++LineIdx)
+    for (int i = 0; i < numHVN && lineIdx < MaxDrawn; ++i, ++lineIdx)
     {
-        const s_SJLevel& hvn = DetectedHVNs[i];
-        s_UseTool Tool;
-        Tool.Clear();
-        Tool.ChartNumber = sc.ChartNumber;
-        Tool.DrawingType = SelectedDrawingType;
-        Tool.LineNumber = BaseLineNumber + LineIdx;
-        Tool.BeginValue = hvn.Price;
-        Tool.EndValue = hvn.Price;
-        Tool.BeginDateTime = sc.BaseDateTimeIn[StartBarIndex];
-        Tool.EndDateTime = sc.BaseDateTimeIn[EffectiveEndBarIndex];
+        const s_Level& h = kde.HVNs[i];
+        s_UseTool T; T.Clear();
+        T.ChartNumber = sc.ChartNumber;
+        T.DrawingType = drawType;
+        T.LineNumber  = BaseLine + lineIdx;
+        T.BeginValue  = h.Price; T.EndValue = h.Price;
+        T.BeginDateTime = sc.BaseDateTimeIn[startBar];
+        T.EndDateTime   = sc.BaseDateTimeIn[endBar];
+        T.Color = GradientColor(In_HVNColor.GetColor(), h.Prominence, gradMode);
 
-        // Apply color gradient based on prominence
-        Tool.Color = CalculateGradientColor(In_HVNColor.GetColor(), hvn.Prominence, GradientMode);
+        if (useTrans)
+            T.TransparencyLevel = sjClamp(static_cast<int>((1.0f - h.Prominence) * 65.0f), 0, 80);
 
-        // Apply transparency gradient (stronger levels are solid/opaque; weaker levels fade out)
-        if (UseTransparency)
-        {
-            int trans = static_cast<int>(round((1.0f - hvn.Prominence) * 65.0f));
-            Tool.TransparencyLevel = SJ_Clamp(trans, 0, 80);
-        }
-        else
-        {
-            Tool.TransparencyLevel = 0;
-        }
-
-        int Width = In_BaseLineWidth.GetInt();
+        int w = In_BaseLineWidth.GetInt();
         if (In_ScaleWidthByProminence.GetYesNo())
-        {
-            Width = SJ_Clamp(static_cast<int>(round(Width * (0.6f + 0.8f * hvn.Prominence))), 1, 6);
-        }
-        Tool.LineWidth = Width;
-        Tool.LineStyle = LINESTYLE_SOLID;
+            w = sjClamp(static_cast<int>(round(w * (0.6f + 0.8f * h.Prominence))), 1, 6);
+        T.LineWidth = w;
+        T.LineStyle = LINESTYLE_SOLID;
 
-        if (LabelPos != 2) // 0 = Right Side, 1 = Left Side
+        if (labelPos != 2)
         {
-            Tool.TransparentLabelBackground = 1;
-            Tool.FontSize = LabelFontSize;
-            Tool.TextAlignment = (LabelPos == 0) ? (DT_RIGHT | DT_BOTTOM) : (DT_LEFT | DT_BOTTOM);
-            Tool.DisplayHorizontalLineValue = 0;
-            Tool.Text.Format("HVN %.2f (%.0f%%)", hvn.Price, hvn.Prominence * 100.0f);
+            T.TransparentLabelBackground = 1;
+            T.FontSize = labelFont;
+            T.TextAlignment = (labelPos == 0) ? (DT_RIGHT|DT_BOTTOM) : (DT_LEFT|DT_BOTTOM);
+            T.DisplayHorizontalLineValue = 0;
+            T.Text.Format("HVN %.2f (%.0f%%)", h.Price, h.Prominence * 100.0f);
         }
         else
         {
-            Tool.Text = "";
-            Tool.DisplayHorizontalLineValue = 0;
+            T.Text = ""; T.DisplayHorizontalLineValue = 0;
         }
-        Tool.AddMethod = UTAM_ADD_OR_ADJUST;
-
-        sc.UseTool(Tool);
+        T.AddMethod = UTAM_ADD_OR_ADJUST;
+        sc.UseTool(T);
     }
 
-    // Draw Top LVNs
-    for (int i = 0; i < TargetLVNCount && LineIdx < MaxAllowedDrawnLines; ++i, ++LineIdx)
+    // --- Draw LVN lines ---
+    for (int i = 0; i < numLVN && lineIdx < MaxDrawn; ++i, ++lineIdx)
     {
-        const s_SJLevel& lvn = DetectedLVNs[i];
-        s_UseTool Tool;
-        Tool.Clear();
-        Tool.ChartNumber = sc.ChartNumber;
-        Tool.DrawingType = SelectedDrawingType;
-        Tool.LineNumber = BaseLineNumber + LineIdx;
-        Tool.BeginValue = lvn.Price;
-        Tool.EndValue = lvn.Price;
-        Tool.BeginDateTime = sc.BaseDateTimeIn[StartBarIndex];
-        Tool.EndDateTime = sc.BaseDateTimeIn[EffectiveEndBarIndex];
+        const s_Level& l = kde.LVNs[i];
+        s_UseTool T; T.Clear();
+        T.ChartNumber = sc.ChartNumber;
+        T.DrawingType = drawType;
+        T.LineNumber  = BaseLine + lineIdx;
+        T.BeginValue  = l.Price; T.EndValue = l.Price;
+        T.BeginDateTime = sc.BaseDateTimeIn[startBar];
+        T.EndDateTime   = sc.BaseDateTimeIn[endBar];
+        T.Color = GradientColor(In_LVNColor.GetColor(), l.Prominence, gradMode);
 
-        // Apply color gradient based on vacuum depth
-        Tool.Color = CalculateGradientColor(In_LVNColor.GetColor(), lvn.Prominence, GradientMode);
+        if (useTrans)
+            T.TransparencyLevel = sjClamp(static_cast<int>((1.0f - l.Prominence) * 65.0f), 0, 80);
 
-        // Apply transparency gradient
-        if (UseTransparency)
-        {
-            int trans = static_cast<int>(round((1.0f - lvn.Prominence) * 65.0f));
-            Tool.TransparencyLevel = SJ_Clamp(trans, 0, 80);
-        }
-        else
-        {
-            Tool.TransparencyLevel = 0;
-        }
-
-        int Width = SJ_Max(1, In_BaseLineWidth.GetInt() - 1);
+        int w = sjMax(1, In_BaseLineWidth.GetInt() - 1);
         if (In_ScaleWidthByProminence.GetYesNo())
-        {
-            Width = SJ_Clamp(static_cast<int>(round(Width * (0.6f + 0.6f * lvn.Prominence))), 1, 5);
-        }
-        Tool.LineWidth = Width;
-        Tool.LineStyle = LINESTYLE_DASH;
+            w = sjClamp(static_cast<int>(round(w * (0.6f + 0.6f * l.Prominence))), 1, 5);
+        T.LineWidth = w;
+        T.LineStyle = LINESTYLE_DASH;
 
-        if (LabelPos != 2) // 0 = Right Side, 1 = Left Side
+        if (labelPos != 2)
         {
-            Tool.TransparentLabelBackground = 1;
-            Tool.FontSize = LabelFontSize;
-            Tool.TextAlignment = (LabelPos == 0) ? (DT_RIGHT | DT_BOTTOM) : (DT_LEFT | DT_BOTTOM);
-            Tool.DisplayHorizontalLineValue = 0;
-            Tool.Text.Format("LVN %.2f (%.0f%%)", lvn.Price, lvn.Prominence * 100.0f);
+            T.TransparentLabelBackground = 1;
+            T.FontSize = labelFont;
+            T.TextAlignment = (labelPos == 0) ? (DT_RIGHT|DT_BOTTOM) : (DT_LEFT|DT_BOTTOM);
+            T.DisplayHorizontalLineValue = 0;
+            T.Text.Format("LVN %.2f (%.0f%%)", l.Price, l.Prominence * 100.0f);
         }
         else
         {
-            Tool.Text = "";
-            Tool.DisplayHorizontalLineValue = 0;
+            T.Text = ""; T.DisplayHorizontalLineValue = 0;
         }
-        Tool.AddMethod = UTAM_ADD_OR_ADJUST;
-
-        sc.UseTool(Tool);
+        T.AddMethod = UTAM_ADD_OR_ADJUST;
+        sc.UseTool(T);
     }
 
-    // Clear any obsolete lines from previous calculation
-    for (int i = LineIdx; i < r_LastDrawnCount && i < MaxAllowedDrawnLines; ++i)
-    {
-        sc.DeleteACSChartDrawing(sc.ChartNumber, TOOL_DELETE_CHARTDRAWING, BaseLineNumber + i);
-    }
-
-    r_LastDrawnCount = LineIdx;
+    // Clean up stale lines from prior calculation
+    for (int i = lineIdx; i < r_LastDrawnCount && i < MaxDrawn; ++i)
+        sc.DeleteACSChartDrawing(sc.ChartNumber, TOOL_DELETE_CHARTDRAWING, BaseLine + i);
+    r_LastDrawnCount = lineIdx;
 }
