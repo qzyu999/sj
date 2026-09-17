@@ -12,6 +12,7 @@ static const double SJ_PI = 3.14159265358979323846;
 template<typename T> static inline T sjMin(T a, T b) { return (a < b) ? a : b; }
 template<typename T> static inline T sjMax(T a, T b) { return (a > b) ? a : b; }
 template<typename T> static inline T sjClamp(T v, T lo, T hi) { return (v < lo) ? lo : ((v > hi) ? hi : v); }
+static inline int sjClampI(unsigned int v, int lo, int hi) { int iv = static_cast<int>(v); return (iv < lo) ? lo : ((iv > hi) ? hi : iv); }
 
 // =========================================================================
 // 1. HISTOGRAM COLLECTION — chart-type-agnostic
@@ -950,7 +951,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     auto KDECoords = [&](float ratio, const SCDateTime& lastDT,
                          SCDateTime& baseDT, SCDateTime& tipDT)
     {
-        int placement = sjClamp(In_KDEPlacement.GetIndex(), 0, 2);
+        int placement = sjClampI(In_KDEPlacement.GetIndex(), 0, 2);
         if (placement == 0) // Right Margin
         {
             baseDT = OffsetDT(lastDT, marginOff);
@@ -971,7 +972,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     // --- Draw KDE profile ---
     if (In_PlotKDE.GetYesNo() && kde.MaxDensity > 0.0f)
     {
-        const int style   = sjClamp(In_KDEStyle.GetIndex(), 0, 2);
+        const int style   = sjClampI(In_KDEStyle.GetIndex(), 0, 2);
         const COLORREF kc = In_KDEColor.GetColor();
         const int kTrans  = sjClamp(In_KDETransparency.GetInt(), 0, 95);
         const int kLineW  = sjClamp(In_KDELineWidth.GetInt(), 1, 10);
@@ -1085,9 +1086,9 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     // --- Draw HVN lines ---
     const DrawingTypeEnum drawType =
         (In_LineType.GetIndex() == 0) ? DRAWING_HORIZONTALLINE : DRAWING_RAY;
-    const int gradMode  = sjClamp(In_ColorGradientMode.GetIndex(), 0, 2);
+    const int gradMode  = sjClampI(In_ColorGradientMode.GetIndex(), 0, 2);
     const bool useTrans = In_EnableTransparency.GetYesNo() != 0;
-    const int labelPos  = sjClamp(In_LabelPosition.GetIndex(), 0, 2);
+    const int labelPos  = sjClampI(In_LabelPosition.GetIndex(), 0, 2);
     const int labelFont = sjClamp(In_LabelFontSize.GetInt(), 6, 24);
 
     for (int i = 0; i < numHVN && lineIdx < MaxDrawn; ++i, ++lineIdx)
