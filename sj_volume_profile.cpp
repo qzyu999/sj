@@ -3,7 +3,6 @@
 #include <map>
 #include <cmath>
 #include <algorithm>
-#include <cfloat>
 
 SCDLLName("Sheather-Jones Volume Profile")
 
@@ -310,70 +309,10 @@ static const int MAX_TRACKS = 5;
 
 struct s_DynOutput { float HVN[MAX_TRACKS]; float LVN[MAX_TRACKS]; float Bandwidth; float POC; };
 
-// Greedy nearest-neighbor matching: assign new peaks to the closest previous
-// track positions to maintain visual continuity across bars.
-static void AssignTracks(const float* prev, float* cur, int maxT, int nNew,
-                         const std::vector<float>& newPrices)
-{
-    for (int t = 0; t < maxT; ++t) cur[t] = 0.0f;
-    if (nNew == 0) return;
-
-    // If no previous data, just assign by price order
-    bool hasPrev = false;
-    for (int t = 0; t < maxT; ++t) if (prev[t] != 0.0f) { hasPrev = true; break; }
-
-    if (!hasPrev)
-    {
-        for (int i = 0; i < nNew && i < maxT; ++i) cur[i] = newPrices[i];
-        return;
-    }
-
-    // Match each new peak to nearest unmatched previous track
-    bool usedTrack[MAX_TRACKS] = {};
-    bool usedNew[MAX_TRACKS] = {};
-
-    for (int pass = 0; pass < sjMin(nNew, maxT); ++pass)
-    {
-        float bestDist = FLT_MAX;
-        int bestTrack = -1, bestNew = -1;
-        for (int t = 0; t < maxT; ++t)
-        {
-            if (usedTrack[t] || prev[t] == 0.0f) continue;
-            for (int n = 0; n < nNew; ++n)
-            {
-                if (usedNew[n]) continue;
-                float dist = fabs(newPrices[n] - prev[t]);
-                if (dist < bestDist) { bestDist = dist; bestTrack = t; bestNew = n; }
-            }
-        }
-        if (bestTrack >= 0)
-        {
-            cur[bestTrack] = newPrices[bestNew];
-            usedTrack[bestTrack] = true;
-            usedNew[bestNew] = true;
-        }
-    }
-
-    // Assign remaining unmatched new peaks to empty slots
-    for (int n = 0; n < nNew; ++n)
-    {
-        if (usedNew[n]) continue;
-        for (int t = 0; t < maxT; ++t)
-        {
-            if (!usedTrack[t]) { cur[t] = newPrices[n]; usedTrack[t] = true; usedNew[n] = true; break; }
-        }
-    }
-
-    // Carry forward tracks that lost their peak (hysteresis: hold last value)
-    for (int t = 0; t < maxT; ++t)
-    {
-        if (cur[t] == 0.0f && prev[t] != 0.0f) cur[t] = prev[t];
-    }
-}
-
+// Simple price-ordered slot assignment: sort peaks by price, assign to slots 0..N-1.
+// No track continuity needed — uniform colors mean slot shifts are invisible.
 static s_DynOutput ComputeDynamic(SCStudyInterfaceRef sc, int sIdx, int eIdx,
-                                  float bwMult, int maxTracks,
-                                  const float* prevHVN, const float* prevLVN)
+                                  float bwMult, int maxTracks)
 {
     s_DynOutput out = {};
     s_Histogram hist = CollectHistogram(sc, sIdx, eIdx);
@@ -389,23 +328,19 @@ static s_DynOutput ComputeDynamic(SCStudyInterfaceRef sc, int sIdx, int eIdx,
 
     out.POC = kde.POC;
 
-    // Collect new peak prices sorted by price for track assignment
-    std::vector<float> hvnPrices, lvnPrices;
-    {
-        // Take top by prominence, then sort by price
-        int nH = sjMin(maxTracks, static_cast<int>(kde.HVNs.size()));
-        for (int i = 0; i < nH; ++i) hvnPrices.push_back(kde.HVNs[i].Price);
-        std::sort(hvnPrices.begin(), hvnPrices.end());
+    // HVNs: top by prominence, then assign to slots by price order
+    int nH = sjMin(maxTracks, static_cast<int>(kde.HVNs.size()));
+    std::vector<float> hp;
+    for (int i = 0; i < nH; ++i) hp.push_back(kde.HVNs[i].Price);
+    std::sort(hp.begin(), hp.end());
+    for (int i = 0; i < nH; ++i) out.HVN[i] = hp[i];
 
-        int nL = sjMin(maxTracks, static_cast<int>(kde.LVNs.size()));
-        for (int i = 0; i < nL; ++i) lvnPrices.push_back(kde.LVNs[i].Price);
-        std::sort(lvnPrices.begin(), lvnPrices.end());
-    }
-
-    AssignTracks(prevHVN, out.HVN, maxTracks,
-                 static_cast<int>(hvnPrices.size()), hvnPrices);
-    AssignTracks(prevLVN, out.LVN, maxTracks,
-                 static_cast<int>(lvnPrices.size()), lvnPrices);
+    // LVNs: same approach
+    int nL = sjMin(maxTracks, static_cast<int>(kde.LVNs.size()));
+    std::vector<float> lp;
+    for (int i = 0; i < nL; ++i) lp.push_back(kde.LVNs[i].Price);
+    std::sort(lp.begin(), lp.end());
+    for (int i = 0; i < nL; ++i) out.LVN[i] = lp[i];
 
     return out;
 }
@@ -519,19 +454,17 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         sc.CalculationPrecedence = LOW_PREC_LEVEL;
 
         const char* hn[5] = {"Dynamic HVN 1","Dynamic HVN 2","Dynamic HVN 3","Dynamic HVN 4","Dynamic HVN 5"};
-        const COLORREF hc[5] = {RGB(0,160,75),RGB(0,200,95),RGB(46,204,113),RGB(72,220,150),RGB(120,230,180)};
         for (int t = 0; t < 5; ++t)
         {
             sc.Subgraph[t].Name = hn[t]; sc.Subgraph[t].DrawStyle = DRAWSTYLE_LINE_SKIP_ZEROS;
-            sc.Subgraph[t].PrimaryColor = hc[t]; sc.Subgraph[t].LineWidth = (t<2)?2:1;
+            sc.Subgraph[t].PrimaryColor = RGB(0,185,90); sc.Subgraph[t].LineWidth = 2;
             sc.Subgraph[t].DrawZeros = false;
         }
         const char* ln[5] = {"Dynamic LVN 1","Dynamic LVN 2","Dynamic LVN 3","Dynamic LVN 4","Dynamic LVN 5"};
-        const COLORREF lc[5] = {RGB(220,30,30),RGB(245,50,50),RGB(255,99,71),RGB(240,128,128),RGB(250,160,160)};
         for (int t = 0; t < 5; ++t)
         {
             sc.Subgraph[5+t].Name = ln[t]; sc.Subgraph[5+t].DrawStyle = DRAWSTYLE_DASH;
-            sc.Subgraph[5+t].PrimaryColor = lc[t]; sc.Subgraph[5+t].LineWidth = (t<2)?2:1;
+            sc.Subgraph[5+t].PrimaryColor = RGB(225,45,45); sc.Subgraph[5+t].LineWidth = 1;
             sc.Subgraph[5+t].DrawZeros = false;
         }
         Sub_BW.Name = "Bandwidth"; Sub_BW.DrawStyle = DRAWSTYLE_IGNORE;
@@ -636,17 +569,6 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         }
         else calcStart = sjMax(0, sc.UpdateStartIndex);
 
-        // Previous bar's track values for continuity
-        float prevH[MAX_TRACKS] = {}, prevL[MAX_TRACKS] = {};
-        if (calcStart > 0)
-        {
-            for (int t = 0; t < maxT; ++t)
-            {
-                prevH[t] = sc.Subgraph[t][calcStart-1];
-                prevL[t] = sc.Subgraph[5+t][calcStart-1];
-            }
-        }
-
         for (int bar = calcStart; bar < sc.ArraySize; ++bar)
         {
             int sIdx = 0;
@@ -662,7 +584,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
                 }
             }
 
-            s_DynOutput out = ComputeDynamic(sc, sIdx, bar, bwMult, maxT, prevH, prevL);
+            s_DynOutput out = ComputeDynamic(sc, sIdx, bar, bwMult, maxT);
 
             for (int t = 0; t < 5; ++t)
             {
@@ -671,9 +593,6 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
             }
             Sub_BW[bar] = out.Bandwidth;
             Sub_POC[bar] = out.POC;
-
-            // Save for next bar's continuity
-            for (int t = 0; t < maxT; ++t) { prevH[t]=out.HVN[t]; prevL[t]=out.LVN[t]; }
         }
     }
     else if (sc.UpdateStartIndex == 0)
