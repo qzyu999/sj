@@ -1,0 +1,53 @@
+-- Starting remote build of Custom Studies Source files: sj_volume_profile.cpp. 64-bit --     15:20:03
+
+Allow time for the server to compile the files and build the DLL.
+
+Server: https://build.sierrachart.com
+The remote build is complete.
+The build failed.
+sj_volume_profile.cpp: In lambda function:
+sj_volume_profile.cpp:953:32: error: no matching function for call to 'sjClamp(unsigned int, int, int)'
+  953 |         int placement = sjClamp(In_KDEPlacement.GetIndex(), 0, 2);
+      |                         ~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sj_volume_profile.cpp:14:38: note: candidate: 'template<class T> T sjClamp(T, T, T)'
+   14 | template<typename T> static inline T sjClamp(T v, T lo, T hi) { return (v < lo) ? lo : ((v > hi) ? hi : v); }
+      |                                      ^~~~~~~
+sj_volume_profile.cpp:14:38: note:   template argument deduction/substitution failed:
+sj_volume_profile.cpp:953:32: note:   deduced conflicting types for parameter 'T' ('unsigned int' and 'int')
+  953 |         int placement = sjClamp(In_KDEPlacement.GetIndex(), 0, 2);
+      |                         ~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sj_volume_profile.cpp: In function 'void scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef)':
+sj_volume_profile.cpp:974:36: error: no matching function for call to 'sjClamp(unsigned int, int, int)'
+  974 |         const int style   = sjClamp(In_KDEStyle.GetIndex(), 0, 2);
+      |                             ~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sj_volume_profile.cpp:14:38: note: candidate: 'template<class T> T sjClamp(T, T, T)'
+   14 | template<typename T> static inline T sjClamp(T v, T lo, T hi) { return (v < lo) ? lo : ((v > hi) ? hi : v); }
+      |                                      ^~~~~~~
+sj_volume_profile.cpp:14:38: note:   template argument deduction/substitution failed:
+sj_volume_profile.cpp:974:36: note:   deduced conflicting types for parameter 'T' ('unsigned int' and 'int')
+  974 |         const int style   = sjClamp(In_KDEStyle.GetIndex(), 0, 2);
+      |                             ~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sj_volume_profile.cpp:1088:34: error: no matching function for call to 'sjClamp(unsigned int, int, int)'
+ 1088 |     const int gradMode  = sjClamp(In_ColorGradientMode.GetIndex(), 0, 2);
+      |                           ~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sj_volume_profile.cpp:14:38: note: candidate: 'template<class T> T sjClamp(T, T, T)'
+   14 | template<typename T> static inline T sjClamp(T v, T lo, T hi) { return (v < lo) ? lo : ((v > hi) ? hi : v); }
+      |                                      ^~~~~~~
+sj_volume_profile.cpp:14:38: note:   template argument deduction/substitution failed:
+sj_volume_profile.cpp:1088:34: note:   deduced conflicting types for parameter 'T' ('unsigned int' and 'int')
+ 1088 |     const int gradMode  = sjClamp(In_ColorGradientMode.GetIndex(), 0, 2);
+      |                           ~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sj_volume_profile.cpp:1090:34: error: no matching function for call to 'sjClamp(unsigned int, int, int)'
+ 1090 |     const int labelPos  = sjClamp(In_LabelPosition.GetIndex(), 0, 2);
+      |                           ~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+sj_volume_profile.cpp:14:38: note: candidate: 'template<class T> T sjClamp(T, T, T)'
+   14 | template<typename T> static inline T sjClamp(T v, T lo, T hi) { return (v < lo) ? lo : ((v > hi) ? hi : v); }
+      |                                      ^~~~~~~
+sj_volume_profile.cpp:14:38: note:   template argument deduction/substitution failed:
+sj_volume_profile.cpp:1090:34: note:   deduced conflicting types for parameter 'T' ('unsigned int' and 'int')
+ 1090 |     const int labelPos  = sjClamp(In_LabelPosition.GetIndex(), 0, 2);
+      |                           ~~~~~~~^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Failed to generate the DLL file.
+
+-- End of Build --     15:20:08
