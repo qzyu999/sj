@@ -784,8 +784,9 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     };
 
     int uW = sjClamp(In_KDEWidth.GetInt(), 5, 250);
-    double mW = sjMax(4.0, nV*0.35);
-    double eW = sjMin(static_cast<double>(uW), mW);
+    double eW = static_cast<double>(uW);
+    // Only cap on macro charts where bars are wide and the profile could stretch off-screen
+    if (isMacro) eW = sjMin(eW, sjMax(4.0, nV * 0.35));
     int mOff = sjClamp(In_KDEOffset.GetInt(), 0, 100);
 
     auto KC = [&](float ratio, const SCDateTime& last, SCDateTime& bDT, SCDateTime& tDT)
