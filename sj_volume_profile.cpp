@@ -140,9 +140,7 @@ struct s_KDEResult
     std::vector<float> GridPrices;
     std::vector<float> GridDensity;
     float MaxDensity;
-    float POC;             // price at global max density
-    float VAHigh;          // value area high (70% of volume)
-    float VALow;           // value area low
+    float POC;
     std::vector<s_Level> HVNs;
     std::vector<s_Level> LVNs;
     double GridMin;
@@ -156,7 +154,7 @@ static s_KDEResult EvaluateKDE(
 {
     s_KDEResult res;
     res.MaxDensity = 0.0f;
-    res.POC = 0.0f; res.VAHigh = 0.0f; res.VALow = 0.0f;
+    res.POC = 0.0f;
     res.GridMin = 0.0; res.GridStep = tickSize;
 
     const int M = static_cast<int>(prices.size());
@@ -197,24 +195,6 @@ static s_KDEResult EvaluateKDE(
     if (res.MaxDensity <= 0.0f) return res;
 
     res.POC = res.GridPrices[pocIdx];
-
-    // Value Area: expand outward from POC until 70% of density mass captured
-    {
-        double totalMass = 0.0;
-        for (int k = 0; k < nPts; ++k) totalMass += res.GridDensity[k];
-
-        double captured = res.GridDensity[pocIdx];
-        int lo = pocIdx, hi = pocIdx;
-        while (captured < 0.70 * totalMass && (lo > 0 || hi < nPts - 1))
-        {
-            double leftVal  = (lo > 0)        ? res.GridDensity[lo-1] : -1.0f;
-            double rightVal = (hi < nPts - 1)  ? res.GridDensity[hi+1] : -1.0f;
-            if (leftVal >= rightVal) { --lo; captured += res.GridDensity[lo]; }
-            else                     { ++hi; captured += res.GridDensity[hi]; }
-        }
-        res.VALow  = res.GridPrices[lo];
-        res.VAHigh = res.GridPrices[hi];
-    }
 
     // Peak detection
     const int minDist = sjMax(2, static_cast<int>(round((h*0.7)/res.GridStep)));
@@ -328,7 +308,7 @@ static uint32_t GradientColor(COLORREF base, float t, int mode)
 
 static const int MAX_TRACKS = 5;
 
-struct s_DynOutput { float HVN[MAX_TRACKS]; float LVN[MAX_TRACKS]; float Bandwidth; };
+struct s_DynOutput { float HVN[MAX_TRACKS]; float LVN[MAX_TRACKS]; float Bandwidth; float POC; };
 
 // Greedy nearest-neighbor matching: assign new peaks to the closest previous
 // track positions to maintain visual continuity across bars.
@@ -406,6 +386,8 @@ static s_DynOutput ComputeDynamic(SCStudyInterfaceRef sc, int sIdx, int eIdx,
 
     s_KDEResult kde = EvaluateKDE(sj.Prices, sj.Weights, sj.Bandwidth,
                                   static_cast<double>(sc.TickSize), 3.0f);
+
+    out.POC = kde.POC;
 
     // Collect new peak prices sorted by price for track assignment
     std::vector<float> hvnPrices, lvnPrices;
@@ -564,7 +546,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         In_MinProm.Name = "Min Prominence %"; In_MinProm.SetFloat(3.0f); In_MinProm.SetFloatLimits(0.1f,100.0f);
         In_MaxHVN.Name = "Max HVN Lines"; In_MaxHVN.SetInt(6); In_MaxHVN.SetIntLimits(1,25);
         In_MaxLVN.Name = "Max LVN Lines"; In_MaxLVN.SetInt(4); In_MaxLVN.SetIntLimits(0,25);
-        In_LineType.Name = "Line Type (unused)"; In_LineType.SetCustomInputStrings("Reserved"); In_LineType.SetCustomInputIndex(0);
+        In_LineType.Name = "Line Type (unused)"; In_LineType.SetCustomInputStrings("Reserved"); In_LineType.SetCustomInputIndex(0); // Preserved to keep Input[] indices stable
         In_HVNColor.Name = "HVN Color"; In_HVNColor.SetColor(RGB(0,185,90));
         In_LVNColor.Name = "LVN Color"; In_LVNColor.SetColor(RGB(225,45,45));
         In_LineWidth.Name = "Line Width"; In_LineWidth.SetInt(2); In_LineWidth.SetIntLimits(1,10);
@@ -623,10 +605,19 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     const bool isMacro = IsMacroChart(sc);
     const float bwMult = sjClamp(In_BWMult.GetFloat(), 0.1f, 5.0f);
 
+    // Early exit if both dynamic and static are disabled
+    const int dynMode = In_DynMode.GetIndex();
+    if (dynMode == 3 && !In_DrawStatic.GetYesNo())
+    {
+        for (int i = 0; i < r_LastDrawn && i < MaxDrawn; ++i)
+            sc.DeleteACSChartDrawing(sc.ChartNumber, TOOL_DELETE_CHARTDRAWING, BaseLn+i);
+        r_LastDrawn = 0;
+        return;
+    }
+
     // =================================================================
     // A. DYNAMIC LEVELS with track continuity
     // =================================================================
-    const int dynMode = In_DynMode.GetIndex();
     if (dynMode != 3)
     {
         const int winBars  = sjMax(5, In_DynWindow.GetInt());
@@ -679,21 +670,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
                 sc.Subgraph[5+t][bar] = (t<maxT) ? out.LVN[t] : 0.0f;
             }
             Sub_BW[bar] = out.Bandwidth;
-
-            // POC and VA from the full developing profile for this bar
-            {
-                s_Histogram h = CollectHistogram(sc, sIdx, bar);
-                if (h.TickVol.size() >= 3 && h.Total > 0.0)
-                {
-                    s_SJResult sj = ComputeSJBandwidth(h, static_cast<double>(sc.TickSize));
-                    double bw = sj.Bandwidth * bwMult;
-                    bw = sjMax(bw, static_cast<double>(sc.TickSize));
-                    s_KDEResult kde = EvaluateKDE(sj.Prices, sj.Weights, bw,
-                                                  static_cast<double>(sc.TickSize), 3.0f);
-                    Sub_POC[bar] = kde.POC;
-                }
-                else { Sub_POC[bar]=0; }
-            }
+            Sub_POC[bar] = out.POC;
 
             // Save for next bar's continuity
             for (int t = 0; t < maxT; ++t) { prevH[t]=out.HVN[t]; prevL[t]=out.LVN[t]; }
@@ -749,7 +726,8 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     diag.Format("SJ: N=%.0f M=%d h=%.4f POC=%.2f HVNs=%d LVNs=%d",
                 sj.N, static_cast<int>(sj.Prices.size()), hFinal,
                 kde.POC, nH, nL);
-    sc.AddMessageToLog(diag, 0);
+    if (sc.UpdateStartIndex == 0)
+        sc.AddMessageToLog(diag, 0);
 
     // =================================================================
     // B4. DRAWING
