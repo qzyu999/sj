@@ -787,8 +787,8 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         else              kdeBaseDT = lastBarDT;
     }
 
-    // Right edge for static lines: extend well past the KDE profile into forward space
-    SCDateTime lineRightDT = OD(lastBarDT, mOff + eW + 20);
+    // Right edge for static lines: extend far into forward space to reach chart edge
+    SCDateTime lineRightDT = OD(lastBarDT, mOff + eW + 500);
 
     auto KC = [&](float ratio, const SCDateTime& last, SCDateTime& bDT, SCDateTime& tDT)
     {
