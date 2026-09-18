@@ -349,27 +349,16 @@ static s_DynOutput ComputeDynamic(SCStudyInterfaceRef sc, int sIdx, int eIdx,
 // 6. BAR RANGE SELECTION
 // =========================================================================
 
-static bool IsMacroChart(SCStudyInterfaceRef sc)
-{
-    if (sc.ArraySize < 2) return false;
-    double d = sc.BaseDateTimeIn[sc.ArraySize-1].GetAsDouble() - sc.BaseDateTimeIn[0].GetAsDouble();
-    double avg = d / (sc.ArraySize - 1);
-    return (sc.SecondsPerBar >= 86400 || avg >= 0.70 || sc.ArraySize < 60 || (d > 25.0 && sc.ArraySize < 250));
-}
-
 static void SelectBarRange(SCStudyInterfaceRef sc, int scope, int nBarsBack,
-                           bool isMacro, int& sBar, int& eBar)
+                           int& sBar, int& eBar)
 {
     const int last = sc.ArraySize - 1;
     eBar = last; sBar = 0;
-    if (scope == 0)
+    if (scope == 0) // Current Session — walks back to session boundary, or bar 0 if none found
     {
-        if (!isMacro)
-        {
-            const int today = sc.GetTradingDayDate(sc.BaseDateTimeIn[last]);
-            sBar = last;
-            while (sBar > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[sBar-1]) == today) --sBar;
-        }
+        const int today = sc.GetTradingDayDate(sc.BaseDateTimeIn[last]);
+        sBar = last;
+        while (sBar > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[sBar-1]) == today) --sBar;
     }
     else if (scope == 1) sBar = sjMax(0, last - nBarsBack + 1);
     else if (scope == 2) sBar = 0;
@@ -535,7 +524,6 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         return;
     }
 
-    const bool isMacro = IsMacroChart(sc);
     const float bwMult = sjClamp(In_BWMult.GetFloat(), 0.1f, 5.0f);
 
     // Early exit if both dynamic and static are disabled
@@ -573,15 +561,11 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         {
             int sIdx = 0;
             if (dynMode == 0) sIdx = sjMax(0, bar-winBars+1);
-            else if (dynMode == 1)
+            else if (dynMode == 1) // Session Developing
             {
-                if (isMacro) sIdx = 0;
-                else
-                {
-                    const int day = sc.GetTradingDayDate(sc.BaseDateTimeIn[bar]);
-                    sIdx = bar;
-                    while (sIdx > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[sIdx-1]) == day) --sIdx;
-                }
+                const int day = sc.GetTradingDayDate(sc.BaseDateTimeIn[bar]);
+                sIdx = bar;
+                while (sIdx > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[sIdx-1]) == day) --sIdx;
             }
 
             s_DynOutput out = ComputeDynamic(sc, sIdx, bar, bwMult, maxT);
@@ -616,7 +600,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     }
 
     int sBar = 0, eBar = sc.ArraySize - 1;
-    SelectBarRange(sc, In_Scope.GetIndex(), In_NumBars.GetInt(), isMacro, sBar, eBar);
+    SelectBarRange(sc, In_Scope.GetIndex(), In_NumBars.GetInt(), sBar, eBar);
 
     s_Histogram hist = CollectHistogram(sc, sBar, eBar);
     if (In_Scope.GetIndex() == 0 && hist.TickVol.size() < 5 && sBar > 0)
@@ -646,39 +630,35 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     // =================================================================
     int li = 0; // line index
 
-    // Time projection — use visible chart span for consistent KDE width across all chart types
-    // The KDE width is specified as a percentage of the visible datetime span
-    int fV = sjClamp(sc.IndexOfFirstVisibleBar, 0, sc.ArraySize-1);
-    int lV = sjClamp(sc.IndexOfLastVisibleBar, 0, sc.ArraySize-1);
-    if (lV <= fV) { fV = sjMax(0, sc.ArraySize-80); lV = sc.ArraySize-1; }
-    int nV = sjMax(1, lV-fV);
-    double visSpan = sc.BaseDateTimeIn[lV].GetAsDouble() - sc.BaseDateTimeIn[fV].GetAsDouble();
-    if (visSpan <= 1e-7)
-        visSpan = (sc.SecondsPerBar > 0) ? (nV * sc.SecondsPerBar / 86400.0) : (nV / 1440.0);
-
-    // Profile width as fraction of visible span (user "bars" setting maps to percentage: 35 bars → ~15%)
+    // Time projection: measure actual bar spacing from the chart data
+    // profileSpan = datetime of lastBar - datetime of (lastBar - widthBars)
     int uW = sjClamp(In_KDEWidth.GetInt(), 5, 250);
-    double widthFraction = uW / 250.0;  // 5→2%, 35→14%, 100→40%, 250→100%
-    double profileSpan = visSpan * widthFraction;  // in days
-
-    // dpb for offset calculations: use profile span directly
-    double dpb = (uW > 0) ? (profileSpan / uW) : (visSpan / nV);
-    double fDpb = dpb;
-    if (sc.SecondsPerBar == 0) fDpb = sjMax(fDpb, 1.0 / 96.0);  // 15-min floor in days
+    int lookbackBar = sjMax(0, eBar - uW);
+    double profileSpan = sc.BaseDateTimeIn[eBar].GetAsDouble() - sc.BaseDateTimeIn[lookbackBar].GetAsDouble();
+    int actualBars = eBar - lookbackBar;
+    if (actualBars < 1 || profileSpan <= 1e-7)
+    {
+        // Fallback for very short charts: use SecondsPerBar or 1 minute
+        double fallbackDpb = (sc.SecondsPerBar > 0) ? (sc.SecondsPerBar / 86400.0) : (1.0 / 1440.0);
+        profileSpan = uW * fallbackDpb;
+        actualBars = uW;
+    }
+    double dpb = profileSpan / actualBars;
+    double fDpb = dpb; // forward projection uses same spacing
 
     auto OD = [&](const SCDateTime& a, double off) -> SCDateTime {
-        return SCDateTime(a.GetAsDouble() + off * ((off >= 0) ? fDpb : dpb));
+        return SCDateTime(a.GetAsDouble() + off * fDpb);
     };
 
     double eW = static_cast<double>(uW);
     int mOff = sjClamp(In_KDEOffset.GetInt(), 0, 100);
 
-    // Diagnostic — log after all drawing variables are computed
+    // Diagnostic
     {
         SCString diag;
-        diag.Format("SJ: N=%.0f M=%d h=%.4f POC=%.2f HVNs=%d LVNs=%d bars=[%d..%d] ArraySize=%d isMacro=%d dpb=%.6f eW=%.1f gridPts=%d priceRange=[%.2f,%.2f]",
+        diag.Format("SJ: N=%.0f M=%d h=%.4f POC=%.2f HVNs=%d LVNs=%d bars=[%d..%d] ArraySize=%d dpb=%.6f eW=%.1f gridPts=%d priceRange=[%.2f,%.2f]",
                     sj.N, static_cast<int>(sj.Prices.size()), hFinal,
-                    kde.POC, nH, nL, sBar, eBar, sc.ArraySize, isMacro ? 1 : 0,
+                    kde.POC, nH, nL, sBar, eBar, sc.ArraySize,
                     dpb, eW, static_cast<int>(kde.GridPrices.size()),
                     sj.Prices.empty() ? 0.0 : sj.Prices.front(),
                     sj.Prices.empty() ? 0.0 : sj.Prices.back());
@@ -813,7 +793,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     }
 
     // --- Prior session POC overlay ---
-    if (In_ShowPrior.GetYesNo() && In_Scope.GetIndex() == 0 && !isMacro)
+    if (In_ShowPrior.GetYesNo() && In_Scope.GetIndex() == 0)
     {
         int pS, pE;
         if (FindPriorSession(sc, sBar, pS, pE))
