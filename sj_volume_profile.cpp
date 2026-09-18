@@ -641,15 +641,6 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     const int nH = sjMin(In_MaxHVN.GetInt(), static_cast<int>(kde.HVNs.size()));
     const int nL = sjMin(In_MaxLVN.GetInt(), static_cast<int>(kde.LVNs.size()));
 
-    SCString diag;
-    diag.Format("SJ: N=%.0f M=%d h=%.4f POC=%.2f HVNs=%d LVNs=%d bars=[%d..%d] ArraySize=%d isMacro=%d dpb=%.6f eW=%.1f gridPts=%d priceRange=[%.2f,%.2f]",
-                sj.N, static_cast<int>(sj.Prices.size()), hFinal,
-                kde.POC, nH, nL, sBar, eBar, sc.ArraySize, isMacro ? 1 : 0,
-                dpb, eW, static_cast<int>(kde.GridPrices.size()),
-                sj.Prices.empty() ? 0.0 : sj.Prices.front(),
-                sj.Prices.empty() ? 0.0 : sj.Prices.back());
-    sc.AddMessageToLog(diag, 0);
-
     // =================================================================
     // B4. DRAWING
     // =================================================================
@@ -690,6 +681,18 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     // On macro charts, cap profile width at 35% of visible bars so it doesn't stretch off-screen
     if (isMacro) eW = sjMin(eW, sjMax(4.0, nV * 0.35));
     int mOff = sjClamp(In_KDEOffset.GetInt(), 0, 100);
+
+    // Diagnostic — log after all drawing variables are computed
+    {
+        SCString diag;
+        diag.Format("SJ: N=%.0f M=%d h=%.4f POC=%.2f HVNs=%d LVNs=%d bars=[%d..%d] ArraySize=%d isMacro=%d dpb=%.6f eW=%.1f gridPts=%d priceRange=[%.2f,%.2f]",
+                    sj.N, static_cast<int>(sj.Prices.size()), hFinal,
+                    kde.POC, nH, nL, sBar, eBar, sc.ArraySize, isMacro ? 1 : 0,
+                    dpb, eW, static_cast<int>(kde.GridPrices.size()),
+                    sj.Prices.empty() ? 0.0 : sj.Prices.front(),
+                    sj.Prices.empty() ? 0.0 : sj.Prices.back());
+        sc.AddMessageToLog(diag, 0);
+    }
 
     // Compute the KDE baseline datetime — this is where static lines will originate from
     const SCDateTime lastBarDT = sc.BaseDateTimeIn[eBar];
