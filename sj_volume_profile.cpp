@@ -123,7 +123,7 @@ static s_SJResult ComputeSJBandwidth(const s_Histogram& hist, double tickSize)
 }
 
 // =========================================================================
-// 3. KDE + PEAK/VALLEY + POC + VALUE AREA
+// 3. KDE + PEAK/VALLEY + POC
 // =========================================================================
 
 struct s_Level
@@ -302,7 +302,7 @@ static uint32_t GradientColor(COLORREF base, float t, int mode)
 }
 
 // =========================================================================
-// 5. DYNAMIC LEVELS — nearest-neighbor track assignment for smooth lines
+// 5. DYNAMIC LEVELS — price-ordered slot assignment
 // =========================================================================
 
 static const int MAX_TRACKS = 5;
@@ -549,7 +549,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     }
 
     // =================================================================
-    // A. DYNAMIC LEVELS with track continuity
+    // A. DYNAMIC LEVELS
     // =================================================================
     if (dynMode != 3)
     {
