@@ -1,18 +1,29 @@
--- Starting remote build of Custom Studies Source files: sj_volume_profile.cpp. 64-bit --     18:27:12
-
-Allow time for the server to compile the files and build the DLL.
-
-Server: https://build2.sierrachart.com
-The remote build is complete.
-The build failed.
-sj_volume_profile.cpp: In function 'void scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef)':
-sj_volume_profile.cpp:648:17: error: 'dpb' was not declared in this scope
-  648 |                 dpb, eW, static_cast<int>(kde.GridPrices.size()),
-      |                 ^~~
-sj_volume_profile.cpp:648:22: error: 'eW' was not declared in this scope
-  648 |                 dpb, eW, static_cast<int>(kde.GridPrices.size()),
-      |                      ^~
-
-Failed to generate the DLL file.
-
--- End of Build --     18:27:18
+2026-09-18 18:46:22.958 | HTTPS connection ID:3 to build3.sierrachart.com:443 for request ID:3 (1) | Creating socket. Using TLS 1.2.
+2026-09-18 18:46:22.958 | HTTPS connection ID:3 to build3.sierrachart.com:443 for request ID:3 (1) | New receive buffer size: 0
+2026-09-18 18:46:22.958 | HTTPS connection ID:3 to build3.sierrachart.com:443 for request ID:3 (1) | Connecting to IP: 116.251.186.155.
+2026-09-18 18:46:34.286 | The compiler response is empty.
+2026-09-18 18:46:34.393 | Setting study DLL module function objects to indicate DLL is not loaded: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\sj_volume_profile.dll
+2026-09-18 18:46:34.393 | Unloaded DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\sj_volume_profile.dll. Handle: 6fffd420000
+2026-09-18 18:46:34.659 | HTTPS connection ID:3 to build3.sierrachart.com:443 for request ID:3 (1) | CloseSocket call.
+2026-09-18 18:46:34.659 | HTTPS connection ID:3 to build3.sierrachart.com:443 for request ID:3 (1) | Shutdown started. Waiting for graceful close.
+2026-09-18 18:46:34.858 | HTTPS connection ID:3 to build3.sierrachart.com:443 for request ID:3 (1) | Socket gracefully closed by remote side.
+2026-09-18 18:46:34.858 | HTTPS connection ID:3 to build3.sierrachart.com:443 for request ID:3 (1) | Closed.
+2026-09-18 18:46:44.469 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\sj_volume_profile.dll
+2026-09-18 18:46:44.469 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\StreamTnS.dll
+2026-09-18 18:46:44.469 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\StreamTnS_UDP.dll
+2026-09-18 18:46:44.469 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\T29-SCdX.dll
+2026-09-18 18:46:44.469 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\UserContributedStudies.dll
+2026-09-18 18:46:44.510 | Loading DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\sj_volume_profile.dll (sj_volume_profile_64.dll). Handle: 6fffd420000
+2026-09-18 18:47:06.705 | Chart: F.US.EPZ26 [CBV][M] Daily #10 | Study: Sheather-Jones Volume Profile | SJ: N=389587129 M=5522 h=6.6621 POC=7101.31 HVNs=6 LVNs=4 bars=[0..251] ArraySize=252 isMacro=1 dpb=1.4397...
+2026-09-18 18:47:25.059 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\sj_volume_profile.dll
+2026-09-18 18:47:25.059 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\StreamTnS.dll
+2026-09-18 18:47:25.059 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\StreamTnS_UDP.dll
+2026-09-18 18:47:25.059 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\T29-SCdX.dll
+2026-09-18 18:47:25.059 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\UserContributedStudies.dll
+2026-09-18 18:47:27.299 | Chart: F.US.EPZ26[M] 100000 Volume #12 | Study: Sheather-Jones Volume Profile | SJ: N=1275838 M=258 h=0.2500 POC=7712.50 HVNs=6 LVNs=4 bars=[54..66] ArraySize=67 isMacro=0 dpb=0.03173...
+2026-09-18 18:47:37.865 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\sj_volume_profile.dll
+2026-09-18 18:47:37.865 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\StreamTnS.dll
+2026-09-18 18:47:37.865 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\StreamTnS_UDP.dll
+2026-09-18 18:47:37.865 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\T29-SCdX.dll
+2026-09-18 18:47:37.865 | Found DLL: Z:\Users\jaredyu\Desktop\Sierra_Chart\Data\UserContributedStudies.dll
+2026-09-18 18:47:41.372 | Chart: F.US.EPZ26[M] 5000 Volume #4 | Study: Sheather-Jones Volume Profile | SJ: N=1275838 M=258 h=0.2500 POC=7712.50 HVNs=6 LVNs=4 bars=[966..1221] ArraySize=1222 isMacro=0 dpb=0.006...
