@@ -653,14 +653,26 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     // =================================================================
     int li = 0; // line index
 
-    // Time projection — use local bar spacing near the profile anchor for stable width
+    // Time projection
+    // Intraday: use local bar spacing near the profile anchor for stable width
+    // Macro: use viewport average because local spacing on weekly/yearly bars is huge
     double dpb = 1.0 / 1440.0; // default: 1 minute
-    if (eBar > 0)
+    int nV = 80; // visible bar count estimate (used for macro width cap)
+    if (isMacro)
     {
-        double localSpan = sc.BaseDateTimeIn[eBar].GetAsDouble() - sc.BaseDateTimeIn[sjMax(0, eBar - 5)].GetAsDouble();
-        int localBars = sjMin(5, eBar);
-        if (localBars > 0 && localSpan > 1e-7)
-            dpb = localSpan / localBars;
+        int fV = sjClamp(sc.IndexOfFirstVisibleBar, 0, sc.ArraySize-1);
+        int lV = sjClamp(sc.IndexOfLastVisibleBar, 0, sc.ArraySize-1);
+        if (lV <= fV) { fV = sjMax(0, sc.ArraySize-80); lV = sc.ArraySize-1; }
+        nV = sjMax(1, lV-fV);
+        double vSpan = sc.BaseDateTimeIn[lV].GetAsDouble() - sc.BaseDateTimeIn[fV].GetAsDouble();
+        if (vSpan > 1e-7) dpb = vSpan / nV;
+    }
+    else if (eBar > 0)
+    {
+        int lookback = sjMin(5, eBar);
+        double localSpan = sc.BaseDateTimeIn[eBar].GetAsDouble() - sc.BaseDateTimeIn[eBar - lookback].GetAsDouble();
+        if (lookback > 0 && localSpan > 1e-7)
+            dpb = localSpan / lookback;
     }
     if (dpb <= 1e-7)
         dpb = (sc.SecondsPerBar > 0) ? (sc.SecondsPerBar / 86400.0) : (1.0 / 1440.0);
@@ -673,8 +685,8 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
 
     int uW = sjClamp(In_KDEWidth.GetInt(), 5, 250);
     double eW = static_cast<double>(uW);
-    // Only cap on macro charts
-    if (isMacro) eW = sjMin(eW, 50.0);
+    // On macro charts, cap profile width at 35% of visible bars so it doesn't stretch off-screen
+    if (isMacro) eW = sjMin(eW, sjMax(4.0, nV * 0.35));
     int mOff = sjClamp(In_KDEOffset.GetInt(), 0, 100);
 
     // Compute the KDE baseline datetime — this is where static lines will originate from
