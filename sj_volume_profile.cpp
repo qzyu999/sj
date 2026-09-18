@@ -642,11 +642,13 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     const int nL = sjMin(In_MaxLVN.GetInt(), static_cast<int>(kde.LVNs.size()));
 
     SCString diag;
-    diag.Format("SJ: N=%.0f M=%d h=%.4f POC=%.2f HVNs=%d LVNs=%d",
+    diag.Format("SJ: N=%.0f M=%d h=%.4f POC=%.2f HVNs=%d LVNs=%d bars=[%d..%d] ArraySize=%d isMacro=%d dpb=%.6f eW=%.1f gridPts=%d priceRange=[%.2f,%.2f]",
                 sj.N, static_cast<int>(sj.Prices.size()), hFinal,
-                kde.POC, nH, nL);
-    if (sc.UpdateStartIndex == 0)
-        sc.AddMessageToLog(diag, 0);
+                kde.POC, nH, nL, sBar, eBar, sc.ArraySize, isMacro ? 1 : 0,
+                dpb, eW, static_cast<int>(kde.GridPrices.size()),
+                sj.Prices.empty() ? 0.0 : sj.Prices.front(),
+                sj.Prices.empty() ? 0.0 : sj.Prices.back());
+    sc.AddMessageToLog(diag, 0);
 
     // =================================================================
     // B4. DRAWING
