@@ -431,6 +431,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     SCInputRef In_DynLevels    = sc.Input[29];
     SCInputRef In_DrawStatic   = sc.Input[30];
     SCInputRef In_ShowPrior    = sc.Input[31];
+    SCInputRef In_KDEWidthMode = sc.Input[32];
 
     int& r_LastDrawn = sc.GetPersistentInt(1);
     SCDateTime& r_LastTime = sc.GetPersistentSCDateTime(2);
@@ -480,7 +481,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         In_PlotKDE.Name = "Plot KDE Profile"; In_PlotKDE.SetYesNo(1);
         In_KDEColor.Name = "KDE Color"; In_KDEColor.SetColor(RGB(70,130,180));
         In_KDETrans.Name = "KDE Transparency %"; In_KDETrans.SetInt(50); In_KDETrans.SetIntLimits(0,95);
-        In_KDEWidth.Name = "KDE Width (bars)"; In_KDEWidth.SetInt(35); In_KDEWidth.SetIntLimits(5,300);
+        In_KDEWidth.Name = "KDE Width (% or bars)"; In_KDEWidth.SetInt(15); In_KDEWidth.SetIntLimits(1,300);
         In_BWMode.Name = "Bandwidth Mode"; In_BWMode.SetCustomInputStrings("Sheather-Jones;Fixed"); In_BWMode.SetCustomInputIndex(0);
         In_FixedBW.Name = "Fixed Bandwidth (pts)"; In_FixedBW.SetFloat(5.0f); In_FixedBW.SetFloatLimits(0.25f,500.0f);
         In_KDEStyle.Name = "KDE Style"; In_KDEStyle.SetCustomInputStrings("Envelope;Filled;Both"); In_KDEStyle.SetCustomInputIndex(0);
@@ -495,6 +496,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         In_DynLevels.Name = "Dynamic Levels (1-5)"; In_DynLevels.SetInt(3); In_DynLevels.SetIntLimits(1,5);
         In_DrawStatic.Name = "Draw Static Levels"; In_DrawStatic.SetYesNo(1);
         In_ShowPrior.Name = "Show Prior Session POC"; In_ShowPrior.SetYesNo(1);
+        In_KDEWidthMode.Name = "KDE Width Mode"; In_KDEWidthMode.SetCustomInputStrings("% of Visible Chart;Fixed Bars"); In_KDEWidthMode.SetCustomInputIndex(0);
         return;
     }
 
@@ -632,36 +634,56 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     // =================================================================
     int li = 0; // line index
 
-    // Time projection: measure actual bar spacing from the chart data
-    // profileSpan = datetime of lastBar - datetime of (lastBar - widthBars)
-    int uW = sjClamp(In_KDEWidth.GetInt(), 5, 250);
-    int lookbackBar = sjMax(0, eBar - uW);
-    double profileSpan = sc.BaseDateTimeIn[eBar].GetAsDouble() - sc.BaseDateTimeIn[lookbackBar].GetAsDouble();
-    int actualBars = eBar - lookbackBar;
-    if (actualBars < 1 || profileSpan <= 1e-7)
+    // Time projection — dual mode for KDE width
+    int uW = sjClamp(In_KDEWidth.GetInt(), 1, 300);
+    double profileSpan = 0.0;
+    double eW = 35.0; // effective width in "drawing units" for KC lambda
+
+    if (In_KDEWidthMode.GetIndex() == 0) // % of Visible Chart
     {
-        // Fallback for very short charts: use SecondsPerBar or 1 minute
-        double fallbackDpb = (sc.SecondsPerBar > 0) ? (sc.SecondsPerBar / 86400.0) : (1.0 / 1440.0);
-        profileSpan = uW * fallbackDpb;
-        actualBars = uW;
+        int fV = sjClamp(sc.IndexOfFirstVisibleBar, 0, sc.ArraySize-1);
+        int lV = sjClamp(sc.IndexOfLastVisibleBar, 0, sc.ArraySize-1);
+        if (lV <= fV) { fV = sjMax(0, sc.ArraySize-80); lV = sc.ArraySize-1; }
+        double visSpan = sc.BaseDateTimeIn[lV].GetAsDouble() - sc.BaseDateTimeIn[fV].GetAsDouble();
+        if (visSpan <= 1e-7)
+        {
+            int nV = sjMax(1, lV-fV);
+            visSpan = (sc.SecondsPerBar > 0) ? (nV * sc.SecondsPerBar / 86400.0) : (nV / 1440.0);
+        }
+        double pct = sjClamp(uW / 100.0, 0.01, 1.0);
+        profileSpan = visSpan * pct;
     }
-    double dpb = profileSpan / actualBars;
-    double fDpb = dpb; // forward projection uses same spacing
+    else // Fixed Bars — look up actual bar datetimes
+    {
+        int lookbackBar = sjMax(0, eBar - uW);
+        profileSpan = sc.BaseDateTimeIn[eBar].GetAsDouble() - sc.BaseDateTimeIn[lookbackBar].GetAsDouble();
+        int actualBars = eBar - lookbackBar;
+        if (actualBars < 1 || profileSpan <= 1e-7)
+        {
+            double fb = (sc.SecondsPerBar > 0) ? (sc.SecondsPerBar / 86400.0) : (1.0 / 1440.0);
+            profileSpan = uW * fb;
+        }
+    }
+
+    // dpb: one "eW unit" of time. eW is fixed at 35 internal units for the KC lambda math.
+    eW = 35.0;
+    double fDpb = profileSpan / eW;
+    if (fDpb <= 1e-10) fDpb = 1.0 / 1440.0;
 
     auto OD = [&](const SCDateTime& a, double off) -> SCDateTime {
         return SCDateTime(a.GetAsDouble() + off * fDpb);
     };
 
-    double eW = static_cast<double>(uW);
     int mOff = sjClamp(In_KDEOffset.GetInt(), 0, 100);
 
     // Diagnostic
     {
         SCString diag;
-        diag.Format("SJ: N=%.0f M=%d h=%.4f POC=%.2f HVNs=%d LVNs=%d bars=[%d..%d] ArraySize=%d dpb=%.6f eW=%.1f gridPts=%d priceRange=[%.2f,%.2f]",
+        diag.Format("SJ: N=%.0f M=%d h=%.4f POC=%.2f HVNs=%d LVNs=%d bars=[%d..%d] ArraySize=%d widthMode=%d profileSpan=%.4f fDpb=%.6f gridPts=%d priceRange=[%.2f,%.2f]",
                     sj.N, static_cast<int>(sj.Prices.size()), hFinal,
                     kde.POC, nH, nL, sBar, eBar, sc.ArraySize,
-                    dpb, eW, static_cast<int>(kde.GridPrices.size()),
+                    In_KDEWidthMode.GetIndex(), profileSpan, fDpb,
+                    static_cast<int>(kde.GridPrices.size()),
                     sj.Prices.empty() ? 0.0 : sj.Prices.front(),
                     sj.Prices.empty() ? 0.0 : sj.Prices.back());
         sc.AddMessageToLog(diag, 0);
