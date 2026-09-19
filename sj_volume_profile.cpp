@@ -566,6 +566,8 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
                 const int day = sc.GetTradingDayDate(sc.BaseDateTimeIn[bar]);
                 sIdx = bar;
                 while (sIdx > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[sIdx-1]) == day) --sIdx;
+                // If session search found only this bar (e.g. daily/weekly chart), expand to chart start
+                if (sIdx == bar) sIdx = 0;
             }
 
             s_DynOutput out = ComputeDynamic(sc, sIdx, bar, bwMult, maxT);
