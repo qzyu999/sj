@@ -511,12 +511,13 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         return;
     }
 
-    // Rate-limit
+    // Rate-limit tick updates, but always recalc on full recalc (new bar, reload)
     const int interval = sjMax(1, In_CalcSec.GetInt());
     SCDateTime now = sc.CurrentSystemDateTime;
-    if (r_LastTime.GetTimeInSeconds() > 0 &&
-        (now.GetTimeInSeconds() - r_LastTime.GetTimeInSeconds()) < interval &&
-        sc.UpdateStartIndex > 0) return;
+    if (sc.UpdateStartIndex > 0 &&
+        r_LastTime.GetTimeInSeconds() > 0 &&
+        (now.GetTimeInSeconds() - r_LastTime.GetTimeInSeconds()) < interval)
+        return;
     r_LastTime = now;
 
     if (sc.ArraySize < 1) return;
