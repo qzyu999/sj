@@ -377,19 +377,6 @@ static void SelectBarRange(SCStudyInterfaceRef sc, int scope, int nBarsBack,
     }
 }
 
-// Find prior session bar range for prior-session levels overlay
-static bool FindPriorSession(SCStudyInterfaceRef sc, int curSessionStart,
-                             int& priorStart, int& priorEnd)
-{
-    if (curSessionStart <= 0) return false;
-    priorEnd = curSessionStart - 1;
-    const int pd = sc.GetTradingDayDate(sc.BaseDateTimeIn[priorEnd]);
-    priorStart = priorEnd;
-    while (priorStart > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[priorStart-1]) == pd)
-        --priorStart;
-    return true;
-}
-
 // =========================================================================
 // 7. MAIN STUDY
 // =========================================================================
@@ -495,7 +482,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         In_DynHistory.Name = "Dynamic History (bars)"; In_DynHistory.SetInt(500); In_DynHistory.SetIntLimits(20,10000);
         In_DynLevels.Name = "Dynamic Levels (1-5)"; In_DynLevels.SetInt(3); In_DynLevels.SetIntLimits(1,5);
         In_DrawStatic.Name = "Draw Static Levels"; In_DrawStatic.SetYesNo(1);
-        In_ShowPrior.Name = "Show Prior Session POC"; In_ShowPrior.SetYesNo(1);
+        In_ShowPrior.Name = "Show Prior Session POC (unused)"; In_ShowPrior.SetYesNo(0);
         In_KDEWidthMode.Name = "KDE Width Mode"; In_KDEWidthMode.SetCustomInputStrings("% of Visible Chart;Fixed Bars"); In_KDEWidthMode.SetCustomInputIndex(0);
         return;
     }
@@ -815,38 +802,6 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
             T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_TOP):(DT_LEFT|DT_TOP);
             T.DisplayHorizontalLineValue=0; T.Text.Format("POC %.2f", kde.POC); }
         T.AddMethod=UTAM_ADD_OR_ADJUST; sc.UseTool(T);
-    }
-
-    // --- Prior session POC overlay ---
-    if (In_ShowPrior.GetYesNo() && In_Scope.GetIndex() == 0)
-    {
-        int pS, pE;
-        if (FindPriorSession(sc, sBar, pS, pE))
-        {
-            s_Histogram ph = CollectHistogram(sc, pS, pE);
-            if (ph.TickVol.size() >= 5 && ph.Total > 0.0)
-            {
-                s_SJResult psj = ComputeSJBandwidth(ph, static_cast<double>(sc.TickSize));
-                double pbw = psj.Bandwidth * bwMult;
-                pbw = sjMax(pbw, static_cast<double>(sc.TickSize));
-                s_KDEResult pk = EvaluateKDE(psj.Prices, psj.Weights, pbw,
-                                             static_cast<double>(sc.TickSize), In_MinProm.GetFloat());
-                if (pk.MaxDensity > 0.0f)
-                {
-                    // Prior POC
-                    if (li < MaxDrawn) {
-                        s_UseTool T; T.Clear(); T.ChartNumber=sc.ChartNumber; T.DrawingType=DRAWING_LINE;
-                        T.LineNumber=BaseLn+li++; T.BeginValue=pk.POC; T.EndValue=pk.POC;
-                        T.BeginDateTime=lineRightDT; T.EndDateTime=kdeBaseDT;
-                        T.Color=RGB(200,180,60); T.TransparencyLevel=40; T.LineWidth=2; T.LineStyle=LINESTYLE_DOT;
-                        if (lPos!=2) { T.TransparentLabelBackground=1; T.FontSize=lFnt-1;
-                            T.TextAlignment=(lPos==0)?(DT_RIGHT|DT_TOP):(DT_LEFT|DT_TOP);
-                            T.DisplayHorizontalLineValue=0; T.Text.Format("pPOC %.2f", pk.POC); }
-                        T.AddMethod=UTAM_ADD_OR_ADJUST; sc.UseTool(T);
-                    }
-                }
-            }
-        }
     }
 
     // --- HVN lines ---
