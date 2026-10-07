@@ -3,6 +3,7 @@
 #include <map>
 #include <cmath>
 #include <algorithm>
+#include <iterator>
 
 SCDLLName("Sheather-Jones Volume Profile")
 
@@ -57,14 +58,26 @@ struct s_SJResult
     std::vector<double> Prices;
     std::vector<double> Weights;
     double N;
+    double RowStep; // VAP row spacing in price; > tickSize when VAP multiplier > 1 (common on daily+ charts)
 };
 
 static s_SJResult ComputeSJBandwidth(const s_Histogram& hist, double tickSize)
 {
     s_SJResult r;
     r.Bandwidth = tickSize;
+    r.N = 0.0;
+    r.RowStep = tickSize;
     const int M = static_cast<int>(hist.TickVol.size());
     if (M < 3 || hist.Total <= 0.0) return r;
+
+    // h below row spacing makes a comb (one bump per VAP row) and fake HVNs
+    int minGap = 0;
+    for (auto it = std::next(hist.TickVol.begin()); it != hist.TickVol.end(); ++it)
+    {
+        const int g = it->first - std::prev(it)->first;
+        if (minGap == 0 || g < minGap) minGap = g;
+    }
+    r.RowStep = sjMax(1, minGap) * tickSize;
 
     r.N = hist.Total;
     r.Prices.resize(M);
@@ -96,7 +109,7 @@ static s_SJResult ComputeSJBandwidth(const s_Histogram& hist, double tickSize)
     if (scale <= 0.0) scale = sigma;
 
     double h0 = pow(4.0/(3.0*r.N), 0.2) * scale;
-    h0 = sjMax(h0, tickSize);
+    h0 = sjMax(h0, r.RowStep);
 
     double S = 0.0;
     const double h0sq = h0*h0;
@@ -107,7 +120,7 @@ static s_SJResult ComputeSJBandwidth(const s_Histogram& hist, double tickSize)
         {
             double d = r.Prices[j]-r.Prices[i];
             double rsq = d*d/h0sq;
-            if (rsq > 36.0) break;
+            if (rsq > 64.0) break; // 36 left ~1% truncation error per pair; 64 is negligible
             S += 2.0*r.Weights[i]*r.Weights[j]*exp(-rsq/4.0)*((rsq*rsq)/16.0 - 3.0*rsq/4.0 + 0.75);
         }
     }
@@ -118,7 +131,7 @@ static s_SJResult ComputeSJBandwidth(const s_Histogram& hist, double tickSize)
         r.Bandwidth = pow(RK/(r.N*rough), 0.2);
     else
         r.Bandwidth = h0;
-    r.Bandwidth = sjMax(r.Bandwidth, tickSize);
+    r.Bandwidth = sjMax(r.Bandwidth, r.RowStep);
     return r;
 }
 
@@ -164,6 +177,8 @@ static s_KDEResult EvaluateKDE(
     double gridMax = dMax + 4.0*h;
     res.GridStep = sjMin((dMax-dMin)/1499.0, h/2.5);
     res.GridStep = sjMax(res.GridStep, tickSize);
+    // grid must cover full range within 2000 points, else the top of the profile is cut off
+    res.GridStep = sjMax(res.GridStep, (gridMax-res.GridMin)/1999.0);
 
     int nPts = sjClamp(static_cast<int>((gridMax-res.GridMin)/res.GridStep)+1, 20, 2000);
     res.GridPrices.resize(nPts);
@@ -320,7 +335,7 @@ static s_DynOutput ComputeDynamic(SCStudyInterfaceRef sc, int sIdx, int eIdx,
 
     s_SJResult sj = ComputeSJBandwidth(hist, static_cast<double>(sc.TickSize));
     sj.Bandwidth *= bwMult;
-    sj.Bandwidth = sjMax(sj.Bandwidth, static_cast<double>(sc.TickSize));
+    sj.Bandwidth = sjMax(sj.Bandwidth, sj.RowStep);
     out.Bandwidth = static_cast<float>(sj.Bandwidth);
 
     s_KDEResult kde = EvaluateKDE(sj.Prices, sj.Weights, sj.Bandwidth,
@@ -362,19 +377,6 @@ static void SelectBarRange(SCStudyInterfaceRef sc, int scope, int nBarsBack,
     }
     else if (scope == 1) sBar = sjMax(0, last - nBarsBack + 1);
     else if (scope == 2) sBar = 0;
-    else if (scope == 3)
-    {
-        const int today = sc.GetTradingDayDate(sc.BaseDateTimeIn[last]);
-        int pe = last;
-        while (pe >= 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[pe]) == today) --pe;
-        if (pe >= 0)
-        {
-            eBar = pe;
-            const int pd = sc.GetTradingDayDate(sc.BaseDateTimeIn[pe]);
-            sBar = pe;
-            while (sBar > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[sBar-1]) == pd) --sBar;
-        }
-    }
 }
 
 // =========================================================================
@@ -417,10 +419,11 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     SCInputRef In_DynHistory   = sc.Input[28];
     SCInputRef In_DynLevels    = sc.Input[29];
     SCInputRef In_DrawStatic   = sc.Input[30];
-    SCInputRef In_ShowPrior    = sc.Input[31];
+    // Input[31] is not used (was prior session POC). Do not reuse: saved charts keep old values.
     SCInputRef In_KDEWidthMode = sc.Input[32];
 
     int& r_LastDrawn = sc.GetPersistentInt(1);
+    int& r_LastArraySize = sc.GetPersistentInt(3);
     SCDateTime& r_LastTime = sc.GetPersistentSCDateTime(2);
 
     if (sc.SetDefaults)
@@ -429,6 +432,8 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         sc.AutoLoop = 0;
         sc.GraphRegion = 0;
         sc.CalculationPrecedence = LOW_PREC_LEVEL;
+        // without this, VAP data exists only if another study (e.g. built-in VbP) requests it
+        sc.MaintainVolumeAtPriceData = 1;
 
         const char* hn[5] = {"Dynamic HVN 1","Dynamic HVN 2","Dynamic HVN 3","Dynamic HVN 4","Dynamic HVN 5"};
         for (int t = 0; t < 5; ++t)
@@ -450,7 +455,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         Sub_POC.PrimaryColor = RGB(255,215,0); Sub_POC.LineWidth = 3; Sub_POC.DrawZeros = false;
 
         In_Scope.Name = "Profile Scope";
-        In_Scope.SetCustomInputStrings("Current Session;Bars Back;Entire Chart;Prior Session");
+        In_Scope.SetCustomInputStrings("Current Session;Bars Back;Entire Chart");
         In_Scope.SetCustomInputIndex(0);
         In_NumBars.Name = "Bars Back"; In_NumBars.SetInt(390); In_NumBars.SetIntLimits(10,50000);
         In_MinProm.Name = "Min Prominence %"; In_MinProm.SetFloat(3.0f); In_MinProm.SetFloatLimits(0.1f,100.0f);
@@ -482,7 +487,6 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         In_DynHistory.Name = "Dynamic History (bars)"; In_DynHistory.SetInt(500); In_DynHistory.SetIntLimits(20,10000);
         In_DynLevels.Name = "Dynamic Levels (1-5)"; In_DynLevels.SetInt(3); In_DynLevels.SetIntLimits(1,5);
         In_DrawStatic.Name = "Draw Static Levels"; In_DrawStatic.SetYesNo(1);
-        In_ShowPrior.Name = "Show Prior Session POC (unused)"; In_ShowPrior.SetYesNo(0);
         In_KDEWidthMode.Name = "KDE Width Mode"; In_KDEWidthMode.SetCustomInputStrings("% of Visible Chart;Fixed Bars"); In_KDEWidthMode.SetCustomInputIndex(0);
         return;
     }
@@ -498,14 +502,16 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         return;
     }
 
-    // Rate-limit tick updates, but always recalc on full recalc (new bar, reload)
+    // Rate-limit tick updates. Always recalc on full recalc or new bar.
+    // Use full date+time: time-of-day wraps at midnight and froze the study until reload.
     const int interval = sjMax(1, In_CalcSec.GetInt());
-    SCDateTime now = sc.CurrentSystemDateTime;
-    if (sc.UpdateStartIndex > 0 &&
-        r_LastTime.GetTimeInSeconds() > 0 &&
-        (now.GetTimeInSeconds() - r_LastTime.GetTimeInSeconds()) < interval)
+    const SCDateTime now = sc.CurrentSystemDateTime;
+    const bool newBar = (sc.ArraySize != r_LastArraySize);
+    const double elapsedSec = (now.GetAsDouble() - r_LastTime.GetAsDouble()) * 86400.0;
+    if (sc.UpdateStartIndex > 0 && !newBar && elapsedSec >= 0.0 && elapsedSec < interval)
         return;
     r_LastTime = now;
+    r_LastArraySize = sc.ArraySize;
 
     if (sc.ArraySize < 1) return;
     if (!sc.VolumeAtPriceForBars)
@@ -556,11 +562,20 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
                 const int day = sc.GetTradingDayDate(sc.BaseDateTimeIn[bar]);
                 sIdx = bar;
                 while (sIdx > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[sIdx-1]) == day) --sIdx;
-                // If session search found only this bar (e.g. daily/weekly chart), expand to chart start
-                if (sIdx == bar) sIdx = 0;
+                // expand to chart start only on daily+ charts (previous session is also one bar).
+                // first bar of an intraday session must not expand, else it shows the prior sessions' levels.
+                if (sIdx == bar && bar > 0)
+                {
+                    const bool prevSingle = (bar == 1) ||
+                        sc.GetTradingDayDate(sc.BaseDateTimeIn[bar-1]) != sc.GetTradingDayDate(sc.BaseDateTimeIn[bar-2]);
+                    if (prevSingle) sIdx = 0;
+                }
             }
 
-            s_DynOutput out = ComputeDynamic(sc, sIdx, bar, bwMult, maxT);
+            // zero on first bar of intraday session: breaks the line so the prior session's level does not join the new one
+            const bool breakLine = (dynMode == 1 && sIdx == bar && bar > 0);
+            s_DynOutput out = {};
+            if (!breakLine) out = ComputeDynamic(sc, sIdx, bar, bwMult, maxT);
 
             for (int t = 0; t < 5; ++t)
             {
@@ -594,25 +609,25 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     int sBar = 0, eBar = sc.ArraySize - 1;
     SelectBarRange(sc, In_Scope.GetIndex(), In_NumBars.GetInt(), sBar, eBar);
 
-    s_Histogram hist = CollectHistogram(sc, sBar, eBar);
-    if (In_Scope.GetIndex() == 0 && hist.TickVol.size() < 5 && sBar > 0)
+    auto ClearStatic = [&]()
     {
-        const int pd = sc.GetTradingDayDate(sc.BaseDateTimeIn[sBar-1]);
-        int ex = sBar-1;
-        while (ex > 0 && sc.GetTradingDayDate(sc.BaseDateTimeIn[ex-1]) == pd) --ex;
-        sBar = ex;
-        hist = CollectHistogram(sc, sBar, eBar);
-    }
-    if (hist.TickVol.size() < 5 || hist.Total <= 0.0) return;
+        for (int i = 0; i < r_LastDrawn && i < MaxDrawn; ++i)
+            sc.DeleteACSChartDrawing(sc.ChartNumber, TOOL_DELETE_CHARTDRAWING, BaseLn+i);
+        r_LastDrawn = 0;
+    };
+
+    // no fallback to prior session: too little data draws nothing instead of stale levels
+    s_Histogram hist = CollectHistogram(sc, sBar, eBar);
+    if (hist.TickVol.size() < 5 || hist.Total <= 0.0) { ClearStatic(); return; }
 
     s_SJResult sj = ComputeSJBandwidth(hist, static_cast<double>(sc.TickSize));
     double hFinal = (In_BWMode.GetIndex() == 1) ? static_cast<double>(In_FixedBW.GetFloat()) : sj.Bandwidth;
     hFinal *= bwMult;
-    hFinal = sjMax(hFinal, static_cast<double>(sc.TickSize));
+    hFinal = sjMax(hFinal, sj.RowStep);
 
     s_KDEResult kde = EvaluateKDE(sj.Prices, sj.Weights, hFinal,
                                   static_cast<double>(sc.TickSize), In_MinProm.GetFloat());
-    if (kde.MaxDensity <= 0.0f) return;
+    if (kde.MaxDensity <= 0.0f) { ClearStatic(); return; }
 
     const int nH = sjMin(In_MaxHVN.GetInt(), static_cast<int>(kde.HVNs.size()));
     const int nL = sjMin(In_MaxLVN.GetInt(), static_cast<int>(kde.LVNs.size()));
@@ -622,47 +637,56 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     // =================================================================
     int li = 0; // line index
 
-    // Time projection — dual mode for KDE width
-    int uW = sjClamp(In_KDEWidth.GetInt(), 1, 300);
-    double profileSpan = 0.0;
-    double eW = 35.0; // effective width in "drawing units" for KC lambda
-
+    // All horizontal sizes are in bars. Calendar time is wrong here: weekends, holidays and
+    // overnight gaps make calendar span much larger than bar count, so the profile was sized wrong.
+    const int uW = sjClamp(In_KDEWidth.GetInt(), 1, 300);
+    double widthBars = uW;
     if (In_KDEWidthMode.GetIndex() == 0) // % of Visible Chart
     {
         int fV = sjClamp(sc.IndexOfFirstVisibleBar, 0, sc.ArraySize-1);
         int lV = sjClamp(sc.IndexOfLastVisibleBar, 0, sc.ArraySize-1);
         if (lV <= fV) { fV = sjMax(0, sc.ArraySize-80); lV = sc.ArraySize-1; }
-        double visSpan = sc.BaseDateTimeIn[lV].GetAsDouble() - sc.BaseDateTimeIn[fV].GetAsDouble();
-        if (visSpan <= 1e-7)
-        {
-            int nV = sjMax(1, lV-fV);
-            visSpan = (sc.SecondsPerBar > 0) ? (nV * sc.SecondsPerBar / 86400.0) : (nV / 1440.0);
-        }
-        double pct = sjClamp(uW / 100.0, 0.01, 1.0);
-        profileSpan = visSpan * pct;
+        widthBars = (lV - fV + 1) * sjClamp(uW / 100.0, 0.01, 1.0);
     }
-    else // Fixed Bars — look up actual bar datetimes
+    widthBars = sjMax(widthBars, 3.0);
+
+    // Bar duration for the forward area: median of recent gaps ignores weekend/overnight gaps
+    // (daily ~1d, weekly ~7d, monthly ~30d, yearly ~365d).
+    const int last = sc.ArraySize - 1;
+    double barDur = (sc.SecondsPerBar > 0) ? sc.SecondsPerBar / 86400.0 : 1.0;
     {
-        int lookbackBar = sjMax(0, eBar - uW);
-        profileSpan = sc.BaseDateTimeIn[eBar].GetAsDouble() - sc.BaseDateTimeIn[lookbackBar].GetAsDouble();
-        int actualBars = eBar - lookbackBar;
-        if (actualBars < 1 || profileSpan <= 1e-7)
+        std::vector<double> gaps;
+        for (int i = last; i > 0 && gaps.size() < 50; --i)
         {
-            double fb = (sc.SecondsPerBar > 0) ? (sc.SecondsPerBar / 86400.0) : (1.0 / 1440.0);
-            profileSpan = uW * fb;
+            const double g = sc.BaseDateTimeIn[i].GetAsDouble() - sc.BaseDateTimeIn[i-1].GetAsDouble();
+            if (g > 1e-9) gaps.push_back(g);
+        }
+        if (!gaps.empty())
+        {
+            std::nth_element(gaps.begin(), gaps.begin() + gaps.size()/2, gaps.end());
+            barDur = gaps[gaps.size()/2];
         }
     }
 
-    // dpb: one "eW unit" of time. eW is fixed at 35 internal units for the KC lambda math.
-    eW = 35.0;
-    double fDpb = profileSpan / eW;
-    if (fDpb <= 1e-10) fDpb = 1.0 / 1440.0;
-
-    auto OD = [&](const SCDateTime& a, double off) -> SCDateTime {
-        return SCDateTime(a.GetAsDouble() + off * fDpb);
+    // DateTime at a fractional bar offset from the last chart bar. Negative offsets use real
+    // bar datetimes so "Over Price" placement follows bars, not calendar time.
+    auto BarDT = [&](double off) -> SCDateTime {
+        if (off >= 0.0) return SCDateTime(sc.BaseDateTimeIn[last].GetAsDouble() + off * barDur);
+        const double pos = sjMax(0.0, last + off);
+        const int i0 = static_cast<int>(floor(pos));
+        const int i1 = sjMin(i0 + 1, last);
+        const double fr = pos - i0;
+        return SCDateTime(sc.BaseDateTimeIn[i0].GetAsDouble() * (1.0 - fr) + sc.BaseDateTimeIn[i1].GetAsDouble() * fr);
     };
 
-    int mOff = sjClamp(In_KDEOffset.GetInt(), 0, 100);
+    const double eW = 35.0; // internal width units used by KC
+    const double unitBars = widthBars / eW;
+    auto OD = [&](const SCDateTime&, double off) -> SCDateTime { return BarDT(off * unitBars); };
+
+    // offset input is in bars; convert to eW units
+    const double mOff = sjClamp(In_KDEOffset.GetInt(), 0, 300) / unitBars;
+    const double profileSpan = widthBars * barDur;
+    const double fDpb = unitBars * barDur;
 
     // Diagnostic
     {
@@ -677,8 +701,8 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         sc.AddMessageToLog(diag, 0);
     }
 
-    // Compute the KDE baseline datetime — this is where static lines will originate from
-    const SCDateTime lastBarDT = sc.BaseDateTimeIn[eBar];
+    // anchor drawing to the last chart bar
+    const SCDateTime lastBarDT = sc.BaseDateTimeIn[last];
     SCDateTime kdeBaseDT = lastBarDT; // fallback
     {
         int pl = sjClampI(In_KDEPlace.GetIndex(), 0, 2);
@@ -688,14 +712,14 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
     }
 
     // Right edge for static lines: extend far into forward space to reach chart edge
-    SCDateTime lineRightDT = OD(lastBarDT, mOff + eW + 1000);
+    SCDateTime lineRightDT = BarDT(mOff * unitBars + widthBars + 1000.0);
 
-    auto KC = [&](float ratio, const SCDateTime& last, SCDateTime& bDT, SCDateTime& tDT)
+    auto KC = [&](float ratio, const SCDateTime& anchor, SCDateTime& bDT, SCDateTime& tDT)
     {
         int pl = sjClampI(In_KDEPlace.GetIndex(), 0, 2);
-        if (pl==0) { bDT=OD(last,mOff); tDT=OD(last,mOff+ratio*eW); }
-        else if (pl==1) { bDT=OD(last,mOff+eW); tDT=OD(last,mOff+eW-ratio*eW); }
-        else { bDT=last; tDT=OD(last,-ratio*eW); }
+        if (pl==0) { bDT=OD(anchor,mOff); tDT=OD(anchor,mOff+ratio*eW); }
+        else if (pl==1) { bDT=OD(anchor,mOff+eW); tDT=OD(anchor,mOff+eW-ratio*eW); }
+        else { bDT=anchor; tDT=OD(anchor,-ratio*eW); }
     };
 
     // --- KDE Profile ---
@@ -705,7 +729,7 @@ SCSFExport scsf_SheatherJonesVolumeProfile(SCStudyInterfaceRef sc)
         const COLORREF kc = In_KDEColor.GetColor();
         const int kT = sjClamp(In_KDETrans.GetInt(), 0, 95);
         const int kW = sjClamp(In_KDELineW.GetInt(), 1, 10);
-        const SCDateTime lastDT = sc.BaseDateTimeIn[eBar];
+        const SCDateTime lastDT = lastBarDT;
         const int nG = static_cast<int>(kde.GridPrices.size());
 
         if (st==0 || st==2)
